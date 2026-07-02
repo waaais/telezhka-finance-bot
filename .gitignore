@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+data/
+*.db
+*.sqlite
+google-service-account.json
+service-account*.json
+*.egg-info/
+*.pyc
+.DS_Store

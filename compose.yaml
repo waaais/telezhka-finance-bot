@@ -1,0 +1,32 @@
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://finance_bot:finance_bot@postgres:5432/finance_bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./google-service-account.json:/app/google-service-account.json:ro
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: finance_bot
+      POSTGRES_USER: finance_bot
+      POSTGRES_PASSWORD: finance_bot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance_bot -d finance_bot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
