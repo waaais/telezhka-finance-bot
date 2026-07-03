@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     timezone: str = Field(default="Europe/Moscow", alias="TIMEZONE")
     daily_reminder_enabled: bool = Field(default=True, alias="DAILY_REMINDER_ENABLED")
     daily_reminder_time: str = Field(default="22:30", alias="DAILY_REMINDER_TIME")
+    weekly_report_enabled: bool = Field(default=True, alias="WEEKLY_REPORT_ENABLED")
+    weekly_report_time: str = Field(default="23:00", alias="WEEKLY_REPORT_TIME")
+    weekly_report_weekday: int = Field(default=6, alias="WEEKLY_REPORT_WEEKDAY")
+    server_payment_reminder_enabled: bool = Field(
+        default=True,
+        alias="SERVER_PAYMENT_REMINDER_ENABLED",
+    )
+    server_payment_reminder_day: int = Field(default=1, alias="SERVER_PAYMENT_REMINDER_DAY")
+    server_payment_reminder_time: str = Field(
+        default="10:00",
+        alias="SERVER_PAYMENT_REMINDER_TIME",
+    )
     google_sheets_enabled: bool = Field(default=False, alias="GOOGLE_SHEETS_ENABLED")
     google_sheets_spreadsheet_id: str = Field(default="", alias="GOOGLE_SHEETS_SPREADSHEET_ID")
     google_sheets_credentials_file: str = Field(
@@ -47,12 +59,22 @@ class Settings(BaseSettings):
 
     @property
     def reminder_hour_minute(self) -> tuple[int, int]:
-        hour_text, minute_text = self.daily_reminder_time.split(":", maxsplit=1)
-        hour = int(hour_text)
-        minute = int(minute_text)
-        if not 0 <= hour <= 23 or not 0 <= minute <= 59:
-            raise ValueError("DAILY_REMINDER_TIME must be HH:MM")
-        return hour, minute
+        return _parse_hour_minute(self.daily_reminder_time, "DAILY_REMINDER_TIME")
+
+    @property
+    def weekly_report_hour_minute(self) -> tuple[int, int]:
+        if not 0 <= self.weekly_report_weekday <= 6:
+            raise ValueError("WEEKLY_REPORT_WEEKDAY must be 0..6")
+        return _parse_hour_minute(self.weekly_report_time, "WEEKLY_REPORT_TIME")
+
+    @property
+    def server_payment_reminder_hour_minute(self) -> tuple[int, int]:
+        if not 1 <= self.server_payment_reminder_day <= 28:
+            raise ValueError("SERVER_PAYMENT_REMINDER_DAY must be 1..28")
+        return _parse_hour_minute(
+            self.server_payment_reminder_time,
+            "SERVER_PAYMENT_REMINDER_TIME",
+        )
 
     @property
     def is_sqlite(self) -> bool:
@@ -63,6 +85,19 @@ class Settings(BaseSettings):
             db_path = self.database_url.rsplit(":///", maxsplit=1)[-1]
             if db_path.startswith("./"):
                 Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def _parse_hour_minute(value: str, field_name: str) -> tuple[int, int]:
+    try:
+        hour_text, minute_text = value.split(":", maxsplit=1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be HH:MM") from exc
+
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError(f"{field_name} must be HH:MM")
+    return hour, minute
 
 
 @lru_cache

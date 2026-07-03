@@ -9,7 +9,7 @@ from app.bot.handlers import router
 from app.config import get_settings
 from app.integrations.google_sheets import create_sheet_sync
 from app.logging_config import configure_logging
-from app.reminders import run_daily_revenue_reminders
+from app.reminders import run_scheduled_notifications
 from app.salary.engine import SalaryEngine
 from app.services import FinanceService
 from app.storage.database import create_engine, create_session_factory, init_db
@@ -42,9 +42,9 @@ async def main() -> None:
 
     logger.info("Bot started")
     await bot.delete_webhook(drop_pending_updates=False)
-    reminder_task = asyncio.create_task(
-        run_daily_revenue_reminders(bot, finance_service, settings),
-        name="daily-revenue-reminders",
+    notification_task = asyncio.create_task(
+        run_scheduled_notifications(bot, finance_service, settings),
+        name="scheduled-notifications",
     )
     try:
         await dispatcher.start_polling(
@@ -53,9 +53,9 @@ async def main() -> None:
             allowed_updates=dispatcher.resolve_used_update_types(),
         )
     finally:
-        reminder_task.cancel()
+        notification_task.cancel()
         try:
-            await reminder_task
+            await notification_task
         except asyncio.CancelledError:
             pass
 
