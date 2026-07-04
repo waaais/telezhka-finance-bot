@@ -14,6 +14,7 @@ from app.bot.formatters import (
     update_message,
     weekly_salary_message,
 )
+from app.bot.keyboards import main_keyboard
 from app.config import Settings
 from app.parser.finance_parser import current_date
 from app.services import FinanceService
@@ -29,20 +30,21 @@ async def start(message: Message, finance_service: FinanceService) -> None:
         "Привет. Я записываю ежедневную выручку сотрудников и считаю зарплаты.\n\n"
         + help_message(),
         parse_mode="Markdown",
+        reply_markup=main_keyboard(),
     )
 
 
 @router.message(Command("help"))
 async def help_command(message: Message, finance_service: FinanceService) -> None:
     await finance_service.remember_chat(message.chat.id)
-    await message.answer(help_message(), parse_mode="Markdown")
+    await message.answer(help_message(), parse_mode="Markdown", reply_markup=main_keyboard())
 
 
 @router.message(Command("employees"))
 async def employees_command(message: Message, finance_service: FinanceService) -> None:
     await finance_service.remember_chat(message.chat.id)
     employees = await finance_service.list_employees()
-    await message.answer(employees_message(employees))
+    await message.answer(employees_message(employees), reply_markup=main_keyboard())
 
 
 @router.message(Command("set_salary"))
@@ -53,12 +55,16 @@ async def set_salary_command(
 ) -> None:
     await finance_service.remember_chat(message.chat.id)
     if settings.admin_ids and message.chat.id not in settings.admin_ids:
-        await message.answer("Команда доступна только администратору.")
+        await message.answer("Команда доступна только администратору.", reply_markup=main_keyboard())
         return
 
     parts = (message.text or "").split(maxsplit=2)
     if len(parts) != 3:
-        await message.answer("Формат: `/set_salary Имя 2500`", parse_mode="Markdown")
+        await message.answer(
+            "Формат: `/set_salary Имя 2500`",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(),
+        )
         return
 
     _, name, salary_text = parts
@@ -68,18 +74,25 @@ async def set_salary_command(
         await message.answer(
             "Ставка должна быть числом. Например: `/set_salary Настя 2000`",
             parse_mode="Markdown",
+            reply_markup=main_keyboard(),
         )
         return
 
     if salary < 0 or salary > 1_000_000:
-        await message.answer("Ставка выглядит некорректно, проверьте сумму.")
+        await message.answer(
+            "Ставка выглядит некорректно, проверьте сумму.",
+            reply_markup=main_keyboard(),
+        )
         return
 
     employee_name, salary_amount = await finance_service.set_salary(name, salary)
-    await message.answer(f"✅ Обновил ставку: {employee_name} — {salary_amount}")
+    await message.answer(
+        f"✅ Обновил ставку: {employee_name} — {salary_amount}",
+        reply_markup=main_keyboard(),
+    )
 
 
-@router.message(F.text.func(lambda text: text and text.strip().lower() == "неделя"))
+@router.message(F.text.func(lambda text: _button_text(text) == "неделя"))
 async def week_stats(message: Message, finance_service: FinanceService, settings: Settings) -> None:
     await finance_service.remember_chat(message.chat.id)
     period, totals = await finance_service.statistics_for_week(current_date(settings.timezone))
@@ -87,11 +100,12 @@ async def week_stats(message: Message, finance_service: FinanceService, settings
         current_date(settings.timezone)
     )
     await message.answer(
-        stats_message(period, totals) + "\n\n" + weekly_salary_message(salary_period, salary_totals)
+        stats_message(period, totals) + "\n\n" + weekly_salary_message(salary_period, salary_totals),
+        reply_markup=main_keyboard(),
     )
 
 
-@router.message(F.text.func(lambda text: text and text.strip().lower() in {"зарплата", "зп"}))
+@router.message(F.text.func(lambda text: _button_text(text) in {"зарплата", "зп"}))
 async def salary_stats(
     message: Message,
     finance_service: FinanceService,
@@ -99,10 +113,10 @@ async def salary_stats(
 ) -> None:
     await finance_service.remember_chat(message.chat.id)
     period, totals = await finance_service.weekly_salary_breakdown(current_date(settings.timezone))
-    await message.answer(weekly_salary_message(period, totals))
+    await message.answer(weekly_salary_message(period, totals), reply_markup=main_keyboard())
 
 
-@router.message(F.text.func(lambda text: text and text.strip().lower() == "месяц"))
+@router.message(F.text.func(lambda text: _button_text(text) == "месяц"))
 async def month_stats(
     message: Message,
     finance_service: FinanceService,
@@ -110,7 +124,13 @@ async def month_stats(
 ) -> None:
     await finance_service.remember_chat(message.chat.id)
     period, totals = await finance_service.statistics_for_month(current_date(settings.timezone))
-    await message.answer(stats_message(period, totals))
+    await message.answer(stats_message(period, totals), reply_markup=main_keyboard())
+
+
+@router.message(F.text.func(lambda text: _button_text(text) in {"помощь", "help"}))
+async def help_button(message: Message, finance_service: FinanceService) -> None:
+    await finance_service.remember_chat(message.chat.id)
+    await message.answer(help_message(), parse_mode="Markdown", reply_markup=main_keyboard())
 
 
 @router.message(F.text)
@@ -129,35 +149,48 @@ async def finance_text(
             today=current_date(settings.timezone),
         )
         if result.duplicate:
-            await message.answer(duplicate_message())
+            await message.answer(duplicate_message(), reply_markup=main_keyboard())
             return
         if result.parse_error:
-            await message.answer(result.parse_error, parse_mode="Markdown")
+            await message.answer(
+                result.parse_error,
+                parse_mode="Markdown",
+                reply_markup=main_keyboard(),
+            )
             return
         if result.response_text:
-            await message.answer(result.response_text)
+            await message.answer(result.response_text, reply_markup=main_keyboard())
             return
         if result.entry is None:
             await message.answer(
-                "Не смог записать сообщение. Попробуйте еще раз или проверьте формат."
+                "Не смог записать сообщение. Попробуйте еще раз или проверьте формат.",
+                reply_markup=main_keyboard(),
             )
             return
         if result.sheet_error:
-            await message.answer(success_with_sheet_warning(result.entry, updated=result.updated))
+            await message.answer(
+                success_with_sheet_warning(result.entry, updated=result.updated),
+                reply_markup=main_keyboard(),
+            )
             return
         if result.updated:
-            await message.answer(update_message(result.entry))
+            await message.answer(update_message(result.entry), reply_markup=main_keyboard())
             return
-        await message.answer(success_message(result.entry))
+        await message.answer(success_message(result.entry), reply_markup=main_keyboard())
     except Exception:
         logger.exception("Unhandled message processing error")
         await message.answer(
             "Не смог обработать сообщение из-за внутренней ошибки. "
-            "Ошибка записана в лог, данные можно проверить повторной отправкой."
+            "Ошибка записана в лог, данные можно проверить повторной отправкой.",
+            reply_markup=main_keyboard(),
         )
 
 
 @router.message()
 async def fallback(message: Message, finance_service: FinanceService) -> None:
     await finance_service.remember_chat(message.chat.id)
-    await message.answer(help_message(), parse_mode="Markdown")
+    await message.answer(help_message(), parse_mode="Markdown", reply_markup=main_keyboard())
+
+
+def _button_text(text: str | None) -> str:
+    return (text or "").strip().casefold()
