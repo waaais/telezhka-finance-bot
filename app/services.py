@@ -309,11 +309,23 @@ class FinanceService:
 
         async def operation() -> ProcessedFinanceResult:
             async with session_scope(self.session_factory) as session:
-                stored = await FinanceRepository(session).update_entry_once(
+                finance_entries = FinanceRepository(session)
+                stored = await finance_entries.update_entry_once(
                     correction,
                     chat_id=chat_id,
                     message_id=message_id,
                 )
+                if stored.entry is not None and not stored.duplicate:
+                    employees = EmployeeRepository(session)
+                    salary = await self._salary_for_employee_group(
+                        employees,
+                        stored.entry.employee_name,
+                    )
+                    employee = await employees.upsert(stored.entry.employee_name, salary)
+                    stored.entry.employee_id = employee.id
+                    stored.entry.employee_name = employee.name
+                    stored.entry.salary = salary
+                    await session.flush()
                 return ProcessedFinanceResult(
                     entry=stored.entry,
                     duplicate=stored.duplicate,
