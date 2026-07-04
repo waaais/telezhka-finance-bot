@@ -143,12 +143,13 @@ Set these variables in `.env`:
 
 ```bash
 EVOTOR_ENABLED=true
-EVOTOR_TOKEN=
 EVOTOR_BASE_URL=https://api.evotor.ru
 EVOTOR_REVENUE_URL_TEMPLATE=
 EVOTOR_STORE_UUID=
 EVOTOR_TERMINAL_UUID=
 EVOTOR_AUTH_HEADER_NAME=X-Authorization
+EVOTOR_TOKEN=
+EVOTOR_TOKEN_FILE=./data/evotor-token.json
 ```
 
 `EVOTOR_REVENUE_URL_TEMPLATE` supports placeholders:
@@ -164,6 +165,29 @@ EVOTOR_AUTH_HEADER_NAME=X-Authorization
 
 The exact URL depends on the Evotor API access/app being used. Keep the token out
 of Git and store it only in `.env` on the server.
+
+### Evotor App Token Callback
+
+The Evotor developer cabinet can send the REST API application token to this bot.
+Enable the receiver only on the server:
+
+```bash
+EVOTOR_TOKEN_RECEIVER_ENABLED=true
+EVOTOR_CALLBACK_SECRET=replace-with-long-random-secret
+EVOTOR_CALLBACK_HOST=0.0.0.0
+EVOTOR_CALLBACK_PORT=8080
+EVOTOR_CALLBACK_PATH=/evotor/token
+EVOTOR_TOKEN_FILE=./data/evotor-token.json
+```
+
+In the Evotor developer cabinet, set:
+
+- `URL`: `http://SERVER_IP:8080/evotor/token`
+- authorization type: `Ваш токен`
+- `Ваш токен`: the same value as `EVOTOR_CALLBACK_SECRET`
+
+If Evotor requires HTTPS for the callback URL, put a domain and HTTPS reverse proxy
+in front of the bot, then use `https://YOUR_DOMAIN/evotor/token`.
 
 ## Commands
 

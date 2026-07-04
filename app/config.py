@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     evotor_terminal_uuid: str = Field(default="", alias="EVOTOR_TERMINAL_UUID")
     evotor_timeout_seconds: int = Field(default=20, alias="EVOTOR_TIMEOUT_SECONDS")
     evotor_auth_header_name: str = Field(default="X-Authorization", alias="EVOTOR_AUTH_HEADER_NAME")
+    evotor_token_file: str = Field(default="./data/evotor-token.json", alias="EVOTOR_TOKEN_FILE")
+    evotor_token_receiver_enabled: bool = Field(
+        default=False,
+        alias="EVOTOR_TOKEN_RECEIVER_ENABLED",
+    )
+    evotor_callback_secret: str = Field(default="", alias="EVOTOR_CALLBACK_SECRET")
+    evotor_callback_host: str = Field(default="0.0.0.0", alias="EVOTOR_CALLBACK_HOST")
+    evotor_callback_port: int = Field(default=8080, alias="EVOTOR_CALLBACK_PORT")
+    evotor_callback_path: str = Field(default="/evotor/token", alias="EVOTOR_CALLBACK_PATH")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

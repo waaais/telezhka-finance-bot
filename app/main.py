@@ -8,6 +8,7 @@ from aiogram.enums import ParseMode
 from app.bot.handlers import router
 from app.config import get_settings
 from app.integrations.evotor import create_evotor_sync
+from app.integrations.evotor_token_receiver import start_evotor_token_receiver
 from app.integrations.google_sheets import create_sheet_sync
 from app.logging_config import configure_logging
 from app.reminders import run_scheduled_notifications
@@ -50,6 +51,7 @@ async def main() -> None:
 
     logger.info("Bot started")
     await bot.delete_webhook(drop_pending_updates=False)
+    evotor_receiver = await start_evotor_token_receiver(settings)
     notification_task = asyncio.create_task(
         run_scheduled_notifications(bot, finance_service, settings),
         name="scheduled-notifications",
@@ -61,6 +63,8 @@ async def main() -> None:
             allowed_updates=dispatcher.resolve_used_update_types(),
         )
     finally:
+        if evotor_receiver is not None:
+            await evotor_receiver.cleanup()
         notification_task.cancel()
         try:
             await notification_task

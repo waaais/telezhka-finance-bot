@@ -8,6 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.config import Settings
+from app.integrations.evotor_token_receiver import load_token
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class DisabledEvotorSync:
 class EvotorClient:
     def __init__(self, settings: Settings) -> None:
         self.token = settings.evotor_token
+        self.token_file = settings.evotor_token_file
         self.base_url = settings.evotor_base_url.rstrip("/")
         self.revenue_url_template = settings.evotor_revenue_url_template
         self.store_uuid = settings.evotor_store_uuid
@@ -44,8 +46,6 @@ class EvotorClient:
         self.timeout_seconds = settings.evotor_timeout_seconds
         self.auth_header_name = settings.evotor_auth_header_name
 
-        if not self.token:
-            raise ValueError("EVOTOR_TOKEN is required when EVOTOR_ENABLED=true")
         if not self.revenue_url_template:
             raise ValueError("EVOTOR_REVENUE_URL_TEMPLATE is required when EVOTOR_ENABLED=true")
 
@@ -59,11 +59,12 @@ class EvotorClient:
 
     def _request_json(self, entry_date: date) -> Any:
         url = self._build_url(entry_date)
+        token = self._token()
         request = Request(
             url,
             headers={
                 "Accept": "application/json",
-                self.auth_header_name: self.token,
+                self.auth_header_name: token,
             },
         )
         try:
@@ -97,6 +98,12 @@ class EvotorClient:
         if "{" in url or "}" in url:
             raise RuntimeError("EVOTOR_REVENUE_URL_TEMPLATE contains unknown placeholders")
         return url
+
+    def _token(self) -> str:
+        token = self.token or load_token(self.token_file)
+        if not token:
+            raise RuntimeError("Evotor API token is not configured yet")
+        return token
 
 
 def create_evotor_sync(settings: Settings) -> EvotorSync:
