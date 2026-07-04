@@ -6,6 +6,7 @@ from app.integrations.google_sheets import (
     _find_weekly_salary_block,
     _sheet_title_for_date,
     _weekly_salary_totals,
+    _weekly_salary_totals_for_dates,
 )
 
 
@@ -46,6 +47,44 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         self.assertEqual(totals["КСЮША"], 6000)
         self.assertEqual(totals["НАСТЯ"], 2000)
         self.assertEqual(totals["КРИСТИНА"], 0)
+        self.assertEqual(totals["&"], 5000)
+
+    def test_weekly_totals_include_rows_from_adjacent_month_sheet(self) -> None:
+        june_rows = self._daily_rows(
+            [
+                (date(2026, 6, 29), "Ксюша", 2000),
+                (date(2026, 6, 30), "Настя", 2000),
+            ]
+        )
+        july_rows = self._daily_rows(
+            [
+                (date(2026, 7, 1), "Кристина", 2000),
+                (date(2026, 7, 2), "Дима", 2500),
+                (date(2026, 7, 3), "Ксюша+Дима", 4500),
+                (date(2026, 7, 4), "Настя+Ксюша", 4000),
+                (date(2026, 7, 5), "Кристина+Ксюша", 4000),
+            ]
+        )
+
+        totals = _weekly_salary_totals_for_dates(
+            {
+                "ИЮНЬ 2026": june_rows,
+                "ИЮЛЬ 2026": july_rows,
+            },
+            [
+                date(2026, 6, 29),
+                date(2026, 6, 30),
+                date(2026, 7, 1),
+                date(2026, 7, 2),
+                date(2026, 7, 3),
+                date(2026, 7, 4),
+                date(2026, 7, 5),
+            ],
+        )
+
+        self.assertEqual(totals["КСЮША"], 8000)
+        self.assertEqual(totals["НАСТЯ"], 4000)
+        self.assertEqual(totals["КРИСТИНА"], 4000)
         self.assertEqual(totals["&"], 5000)
 
     def test_second_block_is_used_for_dates_after_next_salary_header(self) -> None:
@@ -107,4 +146,16 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         rows[10][6] = "НАСТЯ"
         rows[11][6] = "КРИСТИНА"
         rows[12][6] = "&"
+        return rows
+
+    def _daily_rows(self, entries: list[tuple[date, str, int]]) -> list[list[object]]:
+        rows: list[list[object]] = []
+        for entry_date, employee_name, salary in entries:
+            rows.append([
+                _date_to_sheet_number(entry_date),
+                employee_name,
+                salary,
+                "",
+                "",
+            ])
         return rows

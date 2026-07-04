@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -149,40 +149,69 @@ class GoogleSheetsSync:
             raise RuntimeError(f"Sheet tab not found: {sheet_title}") from exc
 
     def _find_target_row(self, worksheet: gspread.Worksheet, entry_date: date) -> SheetRow:
-        target_serial = _date_to_sheet_number(entry_date)
         rows = worksheet.get("A1:E1000", value_render_option="UNFORMATTED_VALUE")
-        for index, values in enumerate(rows, start=1):
-            if not values:
-                continue
-            first_value = values[0]
-            if _looks_like_same_date(first_value, target_serial):
-                normalized_values = [str(value) if value is not None else "" for value in values]
-                normalized_values.extend([""] * (5 - len(normalized_values)))
-                return SheetRow(row_number=index, values=normalized_values[:5])
-        raise RuntimeError(f"Date row not found in {worksheet.title}: {entry_date.isoformat()}")
+        return _find_target_row_in_rows(rows, worksheet.title, entry_date)
 
     def _update_weekly_salary_summary(
         self,
         worksheet: gspread.Worksheet,
         entry_date: date,
     ) -> None:
-        rows = worksheet.get("A1:H1000", value_render_option="UNFORMATTED_VALUE")
-        target_serial = _date_to_sheet_number(entry_date)
-        block = _find_weekly_salary_block(rows, target_serial)
-        if block is None:
-            logger.info(
-                "Weekly salary block not found for date",
-                extra={"sheet": worksheet.title, "entry_date": entry_date.isoformat()},
+        week_dates = _week_dates(entry_date)
+        rows_by_title: dict[str, tuple[gspread.Worksheet, list[list[object]]]] = {}
+        for week_date in week_dates:
+            sheet_title = _sheet_title_for_date(week_date)
+            if sheet_title in rows_by_title:
+                continue
+            try:
+                week_worksheet = (
+                    worksheet
+                    if getattr(worksheet, "title", "") == sheet_title
+                    else self._worksheet_for_date(week_date)
+                )
+            except RuntimeError:
+                logger.info(
+                    "Sheet tab not found while calculating weekly salary",
+                    extra={"sheet": sheet_title, "entry_date": entry_date.isoformat()},
+                )
+                continue
+            rows_by_title[sheet_title] = (
+                week_worksheet,
+                week_worksheet.get("A1:H1000", value_render_option="UNFORMATTED_VALUE"),
             )
-            return
 
-        totals = _weekly_salary_totals(
-            rows,
-            block,
+        totals = _weekly_salary_totals_for_dates(
+            {title: rows for title, (_week_worksheet, rows) in rows_by_title.items()},
+            week_dates,
             default_salary=self.default_salary,
             low_salary=self.low_salary,
             low_salary_names=self.low_salary_names,
         )
+
+        for sheet_title, (week_worksheet, rows) in rows_by_title.items():
+            block = _find_weekly_salary_block_for_dates(
+                rows,
+                [
+                    week_date
+                    for week_date in week_dates
+                    if _sheet_title_for_date(week_date) == sheet_title
+                ],
+            )
+            if block is None:
+                logger.info(
+                    "Weekly salary block not found for date",
+                    extra={"sheet": sheet_title, "entry_date": entry_date.isoformat()},
+                )
+                continue
+
+            self._write_weekly_salary_totals(week_worksheet, block, totals)
+
+    def _write_weekly_salary_totals(
+        self,
+        worksheet: gspread.Worksheet,
+        block: WeeklySalaryBlock,
+        totals: dict[str, int],
+    ) -> None:
         row_to_label = {row_number: label for label, row_number in block.label_rows.items()}
         first_row = min(block.label_rows.values())
         last_row = max(block.label_rows.values())
@@ -224,6 +253,39 @@ def _looks_like_same_date(value: object, target_serial: int) -> bool:
         except ValueError:
             continue
     return False
+
+
+def _week_dates(entry_date: date) -> list[date]:
+    week_start = entry_date - timedelta(days=entry_date.weekday())
+    return [week_start + timedelta(days=offset) for offset in range(7)]
+
+
+def _find_target_row_in_rows(
+    rows: list[list[object]],
+    sheet_title: str,
+    entry_date: date,
+) -> SheetRow:
+    target_serial = _date_to_sheet_number(entry_date)
+    for index, values in enumerate(rows, start=1):
+        if not values:
+            continue
+        first_value = values[0]
+        if _looks_like_same_date(first_value, target_serial):
+            normalized_values = [str(value) if value is not None else "" for value in values]
+            normalized_values.extend([""] * (5 - len(normalized_values)))
+            return SheetRow(row_number=index, values=normalized_values[:5])
+    raise RuntimeError(f"Date row not found in {sheet_title}: {entry_date.isoformat()}")
+
+
+def _find_weekly_salary_block_for_dates(
+    rows: list[list[object]],
+    entry_dates: list[date],
+) -> WeeklySalaryBlock | None:
+    for entry_date in entry_dates:
+        block = _find_weekly_salary_block(rows, _date_to_sheet_number(entry_date))
+        if block is not None:
+            return block
+    return None
 
 
 def _find_weekly_salary_block(
@@ -272,8 +334,7 @@ def _weekly_salary_totals(
     low_salary: int = 2000,
     low_salary_names: set[str] | None = None,
 ) -> dict[str, int]:
-    totals = {label: 0 for label in SPECIAL_EMPLOYEE_BUCKETS.values()}
-    totals[OTHER_EMPLOYEE_BUCKET] = 0
+    totals = _empty_weekly_salary_totals()
     low_salary_names = low_salary_names or set(SPECIAL_EMPLOYEE_BUCKETS)
 
     for row_number in range(block.data_start_row, block.data_end_row + 1):
@@ -283,15 +344,75 @@ def _weekly_salary_totals(
         if not employee_name or salary is None:
             continue
 
-        for bucket, part_salary in _split_salary_by_employee_group(
+        _add_salary_to_totals(
+            totals,
             str(employee_name),
             salary,
             default_salary=default_salary,
             low_salary=low_salary,
             low_salary_names=low_salary_names,
-        ):
-            totals[bucket] += part_salary
+        )
     return totals
+
+
+def _weekly_salary_totals_for_dates(
+    rows_by_title: dict[str, list[list[object]]],
+    entry_dates: list[date],
+    *,
+    default_salary: int = 2500,
+    low_salary: int = 2000,
+    low_salary_names: set[str] | None = None,
+) -> dict[str, int]:
+    totals = _empty_weekly_salary_totals()
+    low_salary_names = low_salary_names or set(SPECIAL_EMPLOYEE_BUCKETS)
+
+    for entry_date in entry_dates:
+        sheet_title = _sheet_title_for_date(entry_date)
+        rows = rows_by_title.get(sheet_title)
+        if rows is None:
+            continue
+        try:
+            target_row = _find_target_row_in_rows(rows, sheet_title, entry_date)
+        except RuntimeError:
+            continue
+        employee_name = _cell(target_row.values, 1)
+        salary = _number(_cell(target_row.values, 2))
+        if not employee_name or salary is None:
+            continue
+        _add_salary_to_totals(
+            totals,
+            str(employee_name),
+            salary,
+            default_salary=default_salary,
+            low_salary=low_salary,
+            low_salary_names=low_salary_names,
+        )
+    return totals
+
+
+def _empty_weekly_salary_totals() -> dict[str, int]:
+    totals = {label: 0 for label in SPECIAL_EMPLOYEE_BUCKETS.values()}
+    totals[OTHER_EMPLOYEE_BUCKET] = 0
+    return totals
+
+
+def _add_salary_to_totals(
+    totals: dict[str, int],
+    employee_name: str,
+    salary: int,
+    *,
+    default_salary: int,
+    low_salary: int,
+    low_salary_names: set[str],
+) -> None:
+    for bucket, part_salary in _split_salary_by_employee_group(
+        employee_name,
+        salary,
+        default_salary=default_salary,
+        low_salary=low_salary,
+        low_salary_names=low_salary_names,
+    ):
+        totals[bucket] += part_salary
 
 
 def _date_is_inside_rows(
