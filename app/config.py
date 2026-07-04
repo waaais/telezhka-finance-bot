@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     evotor_callback_host: str = Field(default="0.0.0.0", alias="EVOTOR_CALLBACK_HOST")
     evotor_callback_port: int = Field(default=8080, alias="EVOTOR_CALLBACK_PORT")
     evotor_callback_path: str = Field(default="/evotor/token", alias="EVOTOR_CALLBACK_PATH")
+    evotor_receipts_enabled: bool = Field(default=False, alias="EVOTOR_RECEIPTS_ENABLED")
+    evotor_receipts_path: str = Field(default="/evotor/receipts", alias="EVOTOR_RECEIPTS_PATH")
+    evotor_receipts_file: str = Field(
+        default="./data/evotor-receipts.jsonl",
+        alias="EVOTOR_RECEIPTS_FILE",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

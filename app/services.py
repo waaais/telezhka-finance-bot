@@ -454,7 +454,7 @@ class FinanceService:
                 duplicate=False,
                 parse_error=(
                     "Не смог получить выручку из Эвотора. "
-                    "Проверьте токен, кассу и настройки EVOTOR_REVENUE_URL_TEMPLATE."
+                    "Проверьте токен, кассу и настройки приема чеков Evotor."
                 ),
                 sheet_error=str(exc),
             )

@@ -2,7 +2,13 @@ import json
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from app.integrations.evotor_token_receiver import extract_token, load_token, save_token
+from app.integrations.evotor_token_receiver import (
+    extract_token,
+    load_receipts,
+    load_token,
+    save_receipt,
+    save_token,
+)
 
 
 class EvotorTokenReceiverTest(TestCase):
@@ -32,3 +38,22 @@ class EvotorTokenReceiverTest(TestCase):
     def test_missing_token_file_returns_empty_string(self) -> None:
         with TemporaryDirectory() as tmpdir:
             self.assertEqual(load_token(f"{tmpdir}/missing.json"), "")
+
+    def test_save_receipt_redacts_secret(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            receipts_file = f"{tmpdir}/evotor-receipts.jsonl"
+
+            save_receipt(
+                receipts_file,
+                {
+                    "secret": "callback-secret",
+                    "deviceId": "terminal-1",
+                    "totalAmount": 1200,
+                },
+            )
+
+            receipts = load_receipts(receipts_file)
+            self.assertEqual(len(receipts), 1)
+            self.assertIn("received_at", receipts[0])
+            self.assertNotIn("secret", receipts[0]["payload"])
+            self.assertEqual(receipts[0]["payload"]["totalAmount"], 1200)

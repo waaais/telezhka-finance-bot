@@ -32,29 +32,35 @@ SECRET_KEYS = {
 
 
 async def start_evotor_token_receiver(settings: Settings) -> web.AppRunner | None:
-    if not settings.evotor_token_receiver_enabled:
-        logger.info("Evotor token receiver is disabled")
+    if not settings.evotor_token_receiver_enabled and not settings.evotor_receipts_enabled:
+        logger.info("Evotor web receiver is disabled")
         return None
     if not settings.evotor_callback_secret:
-        raise RuntimeError("EVOTOR_CALLBACK_SECRET is required when token receiver is enabled")
+        raise RuntimeError("EVOTOR_CALLBACK_SECRET is required when Evotor receiver is enabled")
 
     app = web.Application()
     app["settings"] = settings
     callback_path = _normalize_path(settings.evotor_callback_path)
+    receipts_path = _normalize_path(settings.evotor_receipts_path)
     app.router.add_get("/health", healthcheck)
-    app.router.add_get(callback_path, receive_evotor_token)
-    app.router.add_post(callback_path, receive_evotor_token)
+    if settings.evotor_token_receiver_enabled:
+        app.router.add_get(callback_path, receive_evotor_token)
+        app.router.add_post(callback_path, receive_evotor_token)
+    if settings.evotor_receipts_enabled:
+        app.router.add_get(receipts_path, receive_evotor_receipt)
+        app.router.add_post(receipts_path, receive_evotor_receipt)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, settings.evotor_callback_host, settings.evotor_callback_port)
     await site.start()
     logger.info(
-        "Evotor token receiver started",
+        "Evotor web receiver started",
         extra={
             "host": settings.evotor_callback_host,
             "port": settings.evotor_callback_port,
-            "path": callback_path,
+            "token_path": callback_path if settings.evotor_token_receiver_enabled else "",
+            "receipts_path": receipts_path if settings.evotor_receipts_enabled else "",
         },
     )
     return runner
@@ -81,6 +87,18 @@ async def receive_evotor_token(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def receive_evotor_receipt(request: web.Request) -> web.Response:
+    settings: Settings = request.app["settings"]
+    data = await _request_data(request)
+    if not _is_authorized(request, data, settings.evotor_callback_secret):
+        logger.warning("Rejected Evotor receipt callback with invalid secret")
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    save_receipt(settings.evotor_receipts_file, data)
+    logger.info("Evotor receipt saved")
+    return web.json_response({"ok": True})
+
+
 def save_token(token_file: str, token: str) -> None:
     path = Path(token_file)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +107,38 @@ def save_token(token_file: str, token: str) -> None:
         "received_at": datetime.now(timezone.utc).isoformat(),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def save_receipt(receipts_file: str, payload: Any) -> None:
+    path = Path(receipts_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    envelope = {
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "payload": _remove_secret_fields(payload),
+    }
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
+        file.write("\n")
+
+
+def load_receipts(receipts_file: str) -> list[dict[str, Any]]:
+    path = Path(receipts_file)
+    if not path.exists():
+        return []
+    receipts: list[dict[str, Any]] = []
+    try:
+        with path.open(encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                payload = json.loads(line)
+                if isinstance(payload, dict):
+                    receipts.append(payload)
+    except (OSError, json.JSONDecodeError):
+        logger.exception("Failed to read Evotor receipts file", extra={"receipts_file": receipts_file})
+        return []
+    return receipts
 
 
 def load_token(token_file: str) -> str:
@@ -135,9 +185,25 @@ async def _request_data(request: web.Request) -> dict[str, Any]:
                 body = {}
             if isinstance(body, dict):
                 data.update(body)
+            elif isinstance(body, list):
+                data["items"] = body
         else:
             form = await request.post()
             data.update({key: value for key, value in form.items()})
+    return data
+
+
+def _remove_secret_fields(data: Any) -> Any:
+    if isinstance(data, dict):
+        clean: dict[str, Any] = {}
+        for key, value in data.items():
+            normalized_key = str(key).replace("-", "_").casefold()
+            if normalized_key in SECRET_KEYS:
+                continue
+            clean[key] = _remove_secret_fields(value)
+        return clean
+    if isinstance(data, list):
+        return [_remove_secret_fields(item) for item in data]
     return data
 
 

@@ -150,6 +150,9 @@ EVOTOR_TERMINAL_UUID=
 EVOTOR_AUTH_HEADER_NAME=X-Authorization
 EVOTOR_TOKEN=
 EVOTOR_TOKEN_FILE=./data/evotor-token.json
+EVOTOR_RECEIPTS_ENABLED=true
+EVOTOR_RECEIPTS_PATH=/evotor/receipts
+EVOTOR_RECEIPTS_FILE=./data/evotor-receipts.jsonl
 ```
 
 `EVOTOR_REVENUE_URL_TEMPLATE` supports placeholders:
@@ -166,6 +169,9 @@ EVOTOR_TOKEN_FILE=./data/evotor-token.json
 The exact URL depends on the Evotor API access/app being used. Keep the token out
 of Git and store it only in `.env` on the server.
 
+If `EVOTOR_REVENUE_URL_TEMPLATE` is empty and `EVOTOR_RECEIPTS_ENABLED=true`,
+the bot reads revenue from receipts pushed by Evotor to `EVOTOR_RECEIPTS_FILE`.
+
 ### Evotor App Token Callback
 
 The Evotor developer cabinet can send the REST API application token to this bot.
@@ -178,6 +184,9 @@ EVOTOR_CALLBACK_HOST=0.0.0.0
 EVOTOR_CALLBACK_PORT=8080
 EVOTOR_CALLBACK_PATH=/evotor/token
 EVOTOR_TOKEN_FILE=./data/evotor-token.json
+EVOTOR_RECEIPTS_ENABLED=true
+EVOTOR_RECEIPTS_PATH=/evotor/receipts
+EVOTOR_RECEIPTS_FILE=./data/evotor-receipts.jsonl
 ```
 
 In the Evotor developer cabinet, set:
@@ -185,6 +194,18 @@ In the Evotor developer cabinet, set:
 - `URL`: `http://SERVER_IP:8080/evotor/token`
 - authorization type: `Ваш токен`
 - `Ваш токен`: the same value as `EVOTOR_CALLBACK_SECRET`
+
+### Evotor Receipts Callback
+
+Use the `Чеки (ver.2)` integration block to push every receipt to the bot:
+
+- `URL`: `http://SERVER_IP:8080/evotor/receipts`
+- authorization token: the same value as `EVOTOR_CALLBACK_SECRET`
+- enable fields: `type`, `storeId`, `deviceId`, `dateTime`, `totalAmount`, `paymentSource`
+
+The bot filters receipts by `EVOTOR_TERMINAL_UUID`. For the current cash register,
+this can be the KKM/device value from Evotor, for example `00307900861869`.
+The `Документы с терминала` block is not required for daily revenue sync.
 
 If Evotor requires HTTPS for the callback URL, put a domain and HTTPS reverse proxy
 in front of the bot, then use `https://YOUR_DOMAIN/evotor/token`.

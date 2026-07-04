@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.config import Settings
-from app.integrations.evotor_token_receiver import load_token
+from app.integrations.evotor_token_receiver import load_receipts, load_token
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +106,37 @@ class EvotorClient:
         return token
 
 
+class EvotorReceiptFileSync:
+    def __init__(self, settings: Settings) -> None:
+        self.receipts_file = settings.evotor_receipts_file
+        self.terminal_uuid = settings.evotor_terminal_uuid
+
+    async def fetch_revenue(self, entry_date: date) -> EvotorRevenue | None:
+        return await asyncio.to_thread(self._fetch_revenue_sync, entry_date)
+
+    def _fetch_revenue_sync(self, entry_date: date) -> EvotorRevenue:
+        documents = []
+        for envelope in load_receipts(self.receipts_file):
+            payload = envelope.get("payload", envelope)
+            received_at = envelope.get("received_at", "")
+            for document in _iter_documents(payload):
+                if self.terminal_uuid and not _matches_terminal(document, self.terminal_uuid):
+                    continue
+                document_date = _document_date(document, fallback=received_at)
+                if document_date != entry_date:
+                    continue
+                documents.append(document)
+        cash, cashless = extract_revenue(documents, terminal_uuid=self.terminal_uuid)
+        return EvotorRevenue(entry_date=entry_date, cash=cash, cashless=cashless, raw=documents)
+
+
 def create_evotor_sync(settings: Settings) -> EvotorSync:
     if not settings.evotor_enabled:
         return DisabledEvotorSync()
+    if settings.evotor_revenue_url_template:
+        return EvotorClient(settings)
+    if settings.evotor_receipts_enabled:
+        return EvotorReceiptFileSync(settings)
     return EvotorClient(settings)
 
 
@@ -149,7 +177,9 @@ def _iter_documents(payload: Any) -> list[dict[str, Any]]:
         return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict):
         return []
-    for key in ("items", "documents", "receipts", "sales", "data", "result"):
+    if _is_document_like(payload):
+        return [payload]
+    for key in ("documents", "receipts", "sales", "data", "result", "items"):
         value = payload.get(key)
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
@@ -162,7 +192,19 @@ def _iter_documents(payload: Any) -> list[dict[str, Any]]:
 
 def _matches_terminal(document: dict[str, Any], terminal_uuid: str) -> bool:
     needle = terminal_uuid.casefold()
-    for key in ("terminalUuid", "terminal_uuid", "deviceUuid", "device_uuid", "cashRegisterId"):
+    for key in (
+        "terminalUuid",
+        "terminal_uuid",
+        "terminalId",
+        "terminal_id",
+        "deviceUuid",
+        "device_uuid",
+        "deviceId",
+        "device_id",
+        "cashRegisterId",
+        "cash_register_id",
+        "kkm",
+    ):
         value = document.get(key)
         if value is not None and str(value).casefold() == needle:
             return True
@@ -170,6 +212,7 @@ def _matches_terminal(document: dict[str, Any], terminal_uuid: str) -> bool:
 
 
 def _extract_document_revenue(document: dict[str, Any]) -> tuple[int, int]:
+    sign = _document_sign(document)
     payments = _payments(document)
     if payments:
         cash = 0
@@ -183,13 +226,16 @@ def _extract_document_revenue(document: dict[str, Any]) -> tuple[int, int]:
                 cash += amount
             else:
                 cashless += amount
-        return cash, cashless
+        return cash * sign, cashless * sign
 
-    amount = _first_number(document, ("sum", "total", "amount", "revenue", "price")) or 0
+    amount = _first_number(
+        document,
+        ("sum", "total", "totalAmount", "total_amount", "amount", "revenue", "price"),
+    ) or 0
     payment_text = json.dumps(document, ensure_ascii=False).casefold()
     if _looks_cash(payment_text):
-        return amount, 0
-    return 0, amount
+        return amount * sign, 0
+    return 0, amount * sign
 
 
 def _payments(document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -203,15 +249,64 @@ def _payments(document: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _payment_amount(payment: dict[str, Any]) -> int:
-    return _first_number(payment, ("amount", "sum", "total", "value", "paid")) or 0
+    return _first_number(payment, ("amount", "sum", "total", "totalAmount", "value", "paid")) or 0
 
 
 def _looks_cashless(value: str) -> bool:
-    return any(marker in value for marker in ("cashless", "card", "bank", "безнал", "карта"))
+    return any(marker in value for marker in ("cashless", "card", "bank", "electronic", "безнал", "карта"))
 
 
 def _looks_cash(value: str) -> bool:
     return any(marker in value for marker in ("cash", "налич", "нал "))
+
+
+def _is_document_like(payload: dict[str, Any]) -> bool:
+    keys = {str(key).casefold() for key in payload}
+    return bool(
+        keys
+        & {
+            "dateTime".casefold(),
+            "datetime",
+            "date",
+            "createdAt".casefold(),
+            "totalAmount".casefold(),
+            "total_amount",
+            "paymentSource".casefold(),
+            "payments",
+            "payment",
+            "deviceId".casefold(),
+            "device_id",
+        }
+    )
+
+
+def _document_date(document: dict[str, Any], *, fallback: Any = "") -> date | None:
+    value = _first_value(
+        document,
+        (
+            "dateTime",
+            "datetime",
+            "date",
+            "createdAt",
+            "created_at",
+            "createdDate",
+            "created_date",
+            "time",
+            "timestamp",
+        ),
+    )
+    parsed = _parse_date(value)
+    if parsed is not None:
+        return parsed
+    return _parse_date(fallback)
+
+
+def _document_sign(document: dict[str, Any]) -> int:
+    value = str(_first_value(document, ("type", "operationType", "operation_type")) or "")
+    value = value.casefold()
+    if any(marker in value for marker in ("payback", "return", "refund", "возврат")):
+        return -1
+    return 1
 
 
 def _first_number(payload: dict[str, Any], keys: tuple[str, ...]) -> int | None:
@@ -222,6 +317,46 @@ def _first_number(payload: dict[str, Any], keys: tuple[str, ...]) -> int | None:
         if number is not None:
             return number
     return None
+
+
+def _first_value(payload: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    lowered = {str(key).casefold(): value for key, value in payload.items()}
+    for key in keys:
+        value = lowered.get(key.casefold())
+        if value is not None:
+            return value
+    return None
+
+
+def _parse_date(value: Any) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, int | float):
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000
+        try:
+            return datetime.fromtimestamp(timestamp).date()
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
 
 
 def _number(value: Any) -> int | None:
