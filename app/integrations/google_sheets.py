@@ -337,6 +337,8 @@ def _split_salary_by_employee_group(
             (employee_bucket(employee), salary)
             for employee, salary in zip(employees, planned_salaries, strict=True)
         ]
+    if total_salary < planned_total:
+        return [(employee_bucket(employees[0]), total_salary)]
 
     distributed: list[tuple[str, int]] = []
     remaining = total_salary

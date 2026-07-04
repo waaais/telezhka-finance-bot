@@ -35,6 +35,19 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         self.assertEqual(totals["КРИСТИНА"], 0)
         self.assertEqual(totals["&"], 7500)
 
+    def test_weekly_totals_keep_partial_composite_salary_on_first_employee(self) -> None:
+        rows = self._sample_rows()
+        rows[4][1:3] = ["Ксюша+Дима", 2000]
+        block = _find_weekly_salary_block(rows, _date_to_sheet_number(date(2026, 7, 4)))
+
+        self.assertIsNotNone(block)
+        totals = _weekly_salary_totals(rows, block)
+
+        self.assertEqual(totals["КСЮША"], 6000)
+        self.assertEqual(totals["НАСТЯ"], 2000)
+        self.assertEqual(totals["КРИСТИНА"], 0)
+        self.assertEqual(totals["&"], 5000)
+
     def test_second_block_is_used_for_dates_after_next_salary_header(self) -> None:
         rows = self._sample_rows()
         block = _find_weekly_salary_block(rows, _date_to_sheet_number(date(2026, 7, 8)))

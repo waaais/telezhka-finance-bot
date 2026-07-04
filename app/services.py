@@ -452,6 +452,9 @@ class FinanceService:
                 for name, salary in zip(parts, planned, strict=True):
                     totals[employee_bucket(name)] += salary
                 continue
+            if entry.salary < planned_total:
+                totals[employee_bucket(parts[0])] += entry.salary
+                continue
             if planned_total <= 0:
                 totals[OTHER_EMPLOYEE_BUCKET] += entry.salary
                 continue
