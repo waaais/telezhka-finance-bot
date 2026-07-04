@@ -124,11 +124,11 @@ creating a duplicate.
 The `эвотор` command tries to fetch today's revenue from Evotor, reads the seller
 from the schedule in Google Sheets, and writes the day into the spreadsheet.
 
-Daily reminders are enabled by default at `22:30` in `TIMEZONE`. Configure with:
+Daily reminders are enabled by default at `22:10` in `TIMEZONE`. Configure with:
 
 ```bash
 DAILY_REMINDER_ENABLED=true
-DAILY_REMINDER_TIME=22:30
+DAILY_REMINDER_TIME=22:10
 ```
 
 ## Evotor Sync
@@ -136,8 +136,8 @@ DAILY_REMINDER_TIME=22:30
 Evotor sync is disabled by default. When enabled, the bot can:
 
 - fetch today's revenue manually with `эвотор`;
-- at `22:30`, fetch revenue automatically instead of only sending a reminder;
-- skip auto-fetch if the day already has data in Google Sheets.
+- at `22:10`, fetch revenue automatically, update the day, and send today's summary;
+- read the seller from the Google Sheets schedule.
 
 Set these variables in `.env`:
 

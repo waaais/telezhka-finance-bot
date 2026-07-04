@@ -7,9 +7,8 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot
 
 from app.bot.formatters import (
+    daily_evotor_summary,
     stats_message,
-    success_message,
-    success_with_sheet_warning,
     weekly_salary_message,
 )
 from app.config import Settings
@@ -119,27 +118,22 @@ async def _send_revenue_reminders(
 
     for chat_id in chat_ids:
         try:
-            if await finance_service.has_finance_entry(chat_id, today):
-                logger.info(
-                    "Daily revenue reminder skipped because entry already exists",
-                    extra={"chat_id": chat_id, "entry_date": today.isoformat()},
-                )
-                continue
             if settings.evotor_enabled:
                 result = await finance_service.import_evotor_revenue(
                     chat_id=chat_id,
                     message_id=-int(today.strftime("%Y%m%d")),
                     today=today,
-                    skip_if_exists=True,
+                    skip_if_exists=False,
                 )
                 if result.entry is not None:
-                    text = (
-                        success_with_sheet_warning(result.entry, updated=result.updated)
-                        if result.sheet_error
-                        else "✅ Автоматически забрал выручку из Эвотора\n\n"
-                        + success_message(result.entry).removeprefix("✅ Записал\n\n")
+                    await bot.send_message(
+                        chat_id,
+                        daily_evotor_summary(
+                            result.entry,
+                            updated=result.updated,
+                            sheet_error=bool(result.sheet_error),
+                        ),
                     )
-                    await bot.send_message(chat_id, text)
                     continue
                 if result.duplicate:
                     continue
@@ -148,6 +142,12 @@ async def _send_revenue_reminders(
                     (result.parse_error or "Не смог получить выручку из Эвотора.")
                     + "\n\n"
                     + REMINDER_TEXT,
+                )
+                continue
+            if await finance_service.has_finance_entry(chat_id, today):
+                logger.info(
+                    "Daily revenue reminder skipped because entry already exists",
+                    extra={"chat_id": chat_id, "entry_date": today.isoformat()},
                 )
                 continue
             await bot.send_message(chat_id, REMINDER_TEXT, parse_mode="Markdown")

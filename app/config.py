@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     admin_chat_ids: str = Field(default="", alias="ADMIN_CHAT_IDS")
     timezone: str = Field(default="Europe/Moscow", alias="TIMEZONE")
     daily_reminder_enabled: bool = Field(default=True, alias="DAILY_REMINDER_ENABLED")
-    daily_reminder_time: str = Field(default="22:30", alias="DAILY_REMINDER_TIME")
+    daily_reminder_time: str = Field(default="22:10", alias="DAILY_REMINDER_TIME")
     weekly_report_enabled: bool = Field(default=True, alias="WEEKLY_REPORT_ENABLED")
     weekly_report_time: str = Field(default="23:00", alias="WEEKLY_REPORT_TIME")
     weekly_report_weekday: int = Field(default=6, alias="WEEKLY_REPORT_WEEKDAY")

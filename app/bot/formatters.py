@@ -41,6 +41,23 @@ def success_with_sheet_warning(entry: FinanceEntry, *, updated: bool = False) ->
     )
 
 
+def daily_evotor_summary(entry: FinanceEntry, *, updated: bool = False, sheet_error: bool = False) -> str:
+    action = "обновил" if updated else "записал"
+    text = (
+        "📊 Сводка за сегодня\n\n"
+        f"📅 {entry.entry_date:%d.%m.%Y}\n"
+        f"👤 работали: {entry.employee_name}\n"
+        f"💵 наличка: {money(entry.cash)}\n"
+        f"💳 безнал: {money(entry.cashless)}\n"
+        f"💰 выручка: {money(entry.revenue)}\n"
+        f"👷 зарплата: {money(entry.salary)}\n\n"
+        f"✅ Evotor посчитал чеки, я {action} день в таблицу."
+    )
+    if sheet_error:
+        text += "\n\n⚠️ В базе сохранил, но в Google Sheets не отправилось. Ошибка записана в лог."
+    return text
+
+
 def duplicate_message() -> str:
     return "☑️ Это сообщение уже было обработано, дубль не записываю."
 
