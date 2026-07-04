@@ -392,7 +392,7 @@ class FinanceService:
     async def _statistics(self, period: Period) -> tuple[Period, dict[str, int]]:
         try:
             sheet_totals = await self.sheet_sync.aggregate_period(period.start, period.end)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Failed to aggregate statistics from Google Sheets",
                 extra={
@@ -400,6 +400,8 @@ class FinanceService:
                     "period_end": period.end.isoformat(),
                 },
             )
+            if self.settings.google_sheets_enabled:
+                raise RuntimeError("Не смог прочитать отчет из Google Sheets.") from exc
             sheet_totals = None
         if sheet_totals is not None:
             return period, sheet_totals

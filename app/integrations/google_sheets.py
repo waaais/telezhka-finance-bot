@@ -176,28 +176,9 @@ class GoogleSheetsSync:
         return normalize_employee_group(employee_name)
 
     def _aggregate_period_sync(self, start_date: date, end_date: date) -> dict[str, int]:
-        totals = {
-            "cash": 0,
-            "cashless": 0,
-            "revenue": 0,
-            "salaries": 0,
-            "profit": 0,
-            "entries": 0,
-        }
-        for target_row in self._sheet_rows_for_dates(_dates_between(start_date, end_date)):
-            salary = _number(_cell(target_row.values, 2))
-            cash = _number(_cell(target_row.values, 3))
-            cashless = _number(_cell(target_row.values, 4))
-            has_entry = any(value is not None for value in (salary, cash, cashless))
-            if not has_entry:
-                continue
-            totals["cash"] += cash or 0
-            totals["cashless"] += cashless or 0
-            totals["salaries"] += salary or 0
-            totals["entries"] += 1
-        totals["revenue"] = totals["cash"] + totals["cashless"]
-        totals["profit"] = totals["revenue"] - totals["salaries"]
-        return totals
+        target_dates = _dates_between(start_date, end_date)
+        rows_by_title = self._rows_by_title_for_dates(target_dates)
+        return _aggregate_rows_for_dates(rows_by_title, target_dates)
 
     def _weekly_salary_breakdown_sync(self, start_date: date, end_date: date) -> dict[str, int]:
         target_dates = _dates_between(start_date, end_date)
@@ -321,6 +302,42 @@ def create_sheet_sync(settings: Settings) -> SheetSync:
     if not settings.google_sheets_enabled:
         return DisabledSheetSync()
     return GoogleSheetsSync(settings)
+
+
+def _aggregate_rows_for_dates(
+    rows_by_title: dict[str, list[list[object]]],
+    target_dates: list[date],
+) -> dict[str, int]:
+    totals = {
+        "cash": 0,
+        "cashless": 0,
+        "revenue": 0,
+        "salaries": 0,
+        "profit": 0,
+        "entries": 0,
+    }
+    for target_date in target_dates:
+        sheet_title = _sheet_title_for_date(target_date)
+        rows = rows_by_title.get(sheet_title)
+        if rows is None:
+            continue
+        try:
+            target_row = _find_target_row_in_rows(rows, sheet_title, target_date)
+        except RuntimeError:
+            continue
+        salary = _number(_cell(target_row.values, 2))
+        cash = _number(_cell(target_row.values, 3))
+        cashless = _number(_cell(target_row.values, 4))
+        has_entry = any(value is not None for value in (salary, cash, cashless))
+        if not has_entry:
+            continue
+        totals["cash"] += cash or 0
+        totals["cashless"] += cashless or 0
+        totals["salaries"] += salary or 0
+        totals["entries"] += 1
+    totals["revenue"] = totals["cash"] + totals["cashless"]
+    totals["profit"] = totals["revenue"] - totals["salaries"]
+    return totals
 
 
 def _date_to_sheet_number(value: date) -> int:

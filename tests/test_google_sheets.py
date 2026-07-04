@@ -2,6 +2,7 @@ from datetime import date
 from unittest import TestCase
 
 from app.integrations.google_sheets import (
+    _aggregate_rows_for_dates,
     _date_to_sheet_number,
     _find_weekly_salary_block,
     _sheet_title_for_date,
@@ -87,6 +88,42 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         self.assertEqual(totals["КРИСТИНА"], 4000)
         self.assertEqual(totals["&"], 5000)
 
+    def test_monthly_aggregate_excludes_adjacent_previous_month_rows(self) -> None:
+        june_rows = self._daily_rows(
+            [
+                (date(2026, 6, 29), "Ксюша", 2000, 5000, 10000),
+                (date(2026, 6, 30), "Настя", 2000, 3440, 15330),
+            ]
+        )
+        july_rows = self._daily_rows(
+            [
+                (date(2026, 7, 1), "Настя", 2000, 7110, 18660),
+                (date(2026, 7, 2), "Дима", 2500, 3560, 17320),
+                (date(2026, 7, 3), "Ксюша+Дима", 4500, 3290, 11680),
+                (date(2026, 7, 4), "Настя+Ксюша", 0, 0, 0),
+            ]
+        )
+
+        totals = _aggregate_rows_for_dates(
+            {
+                "ИЮНЬ 2026": june_rows,
+                "ИЮЛЬ 2026": july_rows,
+            },
+            [
+                date(2026, 7, 1),
+                date(2026, 7, 2),
+                date(2026, 7, 3),
+                date(2026, 7, 4),
+            ],
+        )
+
+        self.assertEqual(totals["cash"], 13960)
+        self.assertEqual(totals["cashless"], 47660)
+        self.assertEqual(totals["revenue"], 61620)
+        self.assertEqual(totals["salaries"], 9000)
+        self.assertEqual(totals["profit"], 52620)
+        self.assertEqual(totals["entries"], 4)
+
     def test_second_block_is_used_for_dates_after_next_salary_header(self) -> None:
         rows = self._sample_rows()
         block = _find_weekly_salary_block(rows, _date_to_sheet_number(date(2026, 7, 8)))
@@ -148,14 +185,22 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         rows[12][6] = "&"
         return rows
 
-    def _daily_rows(self, entries: list[tuple[date, str, int]]) -> list[list[object]]:
+    def _daily_rows(
+        self,
+        entries: list[
+            tuple[date, str, int] | tuple[date, str, int, int, int]
+        ],
+    ) -> list[list[object]]:
         rows: list[list[object]] = []
-        for entry_date, employee_name, salary in entries:
+        for entry in entries:
+            entry_date, employee_name, salary = entry[:3]
+            cash = entry[3] if len(entry) > 3 else ""
+            cashless = entry[4] if len(entry) > 4 else ""
             rows.append([
                 _date_to_sheet_number(entry_date),
                 employee_name,
                 salary,
-                "",
-                "",
+                cash,
+                cashless,
             ])
         return rows

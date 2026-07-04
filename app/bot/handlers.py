@@ -95,14 +95,23 @@ async def set_salary_command(
 @router.message(F.text.func(lambda text: _button_text(text) == "неделя"))
 async def week_stats(message: Message, finance_service: FinanceService, settings: Settings) -> None:
     await finance_service.remember_chat(message.chat.id)
-    period, totals = await finance_service.statistics_for_week(current_date(settings.timezone))
-    salary_period, salary_totals = await finance_service.weekly_salary_breakdown(
-        current_date(settings.timezone)
-    )
-    await message.answer(
-        stats_message(period, totals) + "\n\n" + weekly_salary_message(salary_period, salary_totals),
-        reply_markup=main_keyboard(),
-    )
+    try:
+        period, totals = await finance_service.statistics_for_week(current_date(settings.timezone))
+        salary_period, salary_totals = await finance_service.weekly_salary_breakdown(
+            current_date(settings.timezone)
+        )
+        await message.answer(
+            stats_message(period, totals)
+            + "\n\n"
+            + weekly_salary_message(salary_period, salary_totals),
+            reply_markup=main_keyboard(),
+        )
+    except Exception:
+        logger.exception("Failed to build weekly report")
+        await message.answer(
+            "Не смог прочитать недельный отчет из Google Sheets. Ошибка записана в лог.",
+            reply_markup=main_keyboard(),
+        )
 
 
 @router.message(F.text.func(lambda text: _button_text(text) in {"зарплата", "зп"}))
@@ -112,8 +121,17 @@ async def salary_stats(
     settings: Settings,
 ) -> None:
     await finance_service.remember_chat(message.chat.id)
-    period, totals = await finance_service.weekly_salary_breakdown(current_date(settings.timezone))
-    await message.answer(weekly_salary_message(period, totals), reply_markup=main_keyboard())
+    try:
+        period, totals = await finance_service.weekly_salary_breakdown(
+            current_date(settings.timezone)
+        )
+        await message.answer(weekly_salary_message(period, totals), reply_markup=main_keyboard())
+    except Exception:
+        logger.exception("Failed to build salary report")
+        await message.answer(
+            "Не смог прочитать зарплатный отчет из Google Sheets. Ошибка записана в лог.",
+            reply_markup=main_keyboard(),
+        )
 
 
 @router.message(F.text.func(lambda text: _button_text(text) == "месяц"))
@@ -123,8 +141,15 @@ async def month_stats(
     settings: Settings,
 ) -> None:
     await finance_service.remember_chat(message.chat.id)
-    period, totals = await finance_service.statistics_for_month(current_date(settings.timezone))
-    await message.answer(stats_message(period, totals), reply_markup=main_keyboard())
+    try:
+        period, totals = await finance_service.statistics_for_month(current_date(settings.timezone))
+        await message.answer(stats_message(period, totals), reply_markup=main_keyboard())
+    except Exception:
+        logger.exception("Failed to build monthly report")
+        await message.answer(
+            "Не смог прочитать месячный отчет из Google Sheets. Ошибка записана в лог.",
+            reply_markup=main_keyboard(),
+        )
 
 
 @router.message(F.text.func(lambda text: _button_text(text) in {"помощь", "help"}))
