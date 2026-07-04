@@ -6,7 +6,12 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 
-from app.bot.formatters import stats_message, weekly_salary_message
+from app.bot.formatters import (
+    stats_message,
+    success_message,
+    success_with_sheet_warning,
+    weekly_salary_message,
+)
 from app.config import Settings
 from app.services import FinanceService
 
@@ -54,7 +59,7 @@ async def run_daily_revenue_reminders(
         sleep_seconds = max(1, (next_run - datetime.now(timezone)).total_seconds())
         logger.info("Daily revenue reminder scheduled", extra={"next_run": next_run.isoformat()})
         await asyncio.sleep(sleep_seconds)
-        await _send_revenue_reminders(bot, finance_service, next_run.date())
+        await _send_revenue_reminders(bot, finance_service, settings, next_run.date())
 
 
 async def run_weekly_report_reminders(
@@ -104,6 +109,7 @@ async def run_server_payment_reminders(
 async def _send_revenue_reminders(
     bot: Bot,
     finance_service: FinanceService,
+    settings: Settings,
     today: date,
 ) -> None:
     chat_ids = await finance_service.reminder_chat_ids()
@@ -117,6 +123,31 @@ async def _send_revenue_reminders(
                 logger.info(
                     "Daily revenue reminder skipped because entry already exists",
                     extra={"chat_id": chat_id, "entry_date": today.isoformat()},
+                )
+                continue
+            if settings.evotor_enabled:
+                result = await finance_service.import_evotor_revenue(
+                    chat_id=chat_id,
+                    message_id=-int(today.strftime("%Y%m%d")),
+                    today=today,
+                    skip_if_exists=True,
+                )
+                if result.entry is not None:
+                    text = (
+                        success_with_sheet_warning(result.entry, updated=result.updated)
+                        if result.sheet_error
+                        else "✅ Автоматически забрал выручку из Эвотора\n\n"
+                        + success_message(result.entry).removeprefix("✅ Записал\n\n")
+                    )
+                    await bot.send_message(chat_id, text)
+                    continue
+                if result.duplicate:
+                    continue
+                await bot.send_message(
+                    chat_id,
+                    (result.parse_error or "Не смог получить выручку из Эвотора.")
+                    + "\n\n"
+                    + REMINDER_TEXT,
                 )
                 continue
             await bot.send_message(chat_id, REMINDER_TEXT, parse_mode="Markdown")

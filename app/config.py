@@ -41,6 +41,14 @@ class Settings(BaseSettings):
         alias="GOOGLE_SHEETS_CREDENTIALS_FILE",
     )
     google_sheets_write_mode: str = Field(default="monthly_sheet", alias="GOOGLE_SHEETS_WRITE_MODE")
+    evotor_enabled: bool = Field(default=False, alias="EVOTOR_ENABLED")
+    evotor_token: str = Field(default="", alias="EVOTOR_TOKEN")
+    evotor_base_url: str = Field(default="https://api.evotor.ru", alias="EVOTOR_BASE_URL")
+    evotor_revenue_url_template: str = Field(default="", alias="EVOTOR_REVENUE_URL_TEMPLATE")
+    evotor_store_uuid: str = Field(default="", alias="EVOTOR_STORE_UUID")
+    evotor_terminal_uuid: str = Field(default="", alias="EVOTOR_TERMINAL_UUID")
+    evotor_timeout_seconds: int = Field(default=20, alias="EVOTOR_TIMEOUT_SECONDS")
+    evotor_auth_header_name: str = Field(default="X-Authorization", alias="EVOTOR_AUTH_HEADER_NAME")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

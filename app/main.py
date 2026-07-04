@@ -7,6 +7,7 @@ from aiogram.enums import ParseMode
 
 from app.bot.handlers import router
 from app.config import get_settings
+from app.integrations.evotor import create_evotor_sync
 from app.integrations.google_sheets import create_sheet_sync
 from app.logging_config import configure_logging
 from app.reminders import run_scheduled_notifications
@@ -29,7 +30,14 @@ async def main() -> None:
     await init_db(engine)
 
     sheet_sync = create_sheet_sync(settings)
-    finance_service = FinanceService(session_factory, settings, SalaryEngine(), sheet_sync)
+    evotor_sync = create_evotor_sync(settings)
+    finance_service = FinanceService(
+        session_factory,
+        settings,
+        SalaryEngine(),
+        sheet_sync,
+        evotor_sync,
+    )
     await finance_service.seed_default_employees()
     await finance_service.seed_known_reminder_chats()
 

@@ -117,6 +117,13 @@ creating a duplicate.
 измени наличку за 2 июля на 19000
 ```
 
+```text
+эвотор
+```
+
+The `эвотор` command tries to fetch today's revenue from Evotor, reads the seller
+from the schedule in Google Sheets, and writes the day into the spreadsheet.
+
 Daily reminders are enabled by default at `22:30` in `TIMEZONE`. Configure with:
 
 ```bash
@@ -124,12 +131,47 @@ DAILY_REMINDER_ENABLED=true
 DAILY_REMINDER_TIME=22:30
 ```
 
+## Evotor Sync
+
+Evotor sync is disabled by default. When enabled, the bot can:
+
+- fetch today's revenue manually with `эвотор`;
+- at `22:30`, fetch revenue automatically instead of only sending a reminder;
+- skip auto-fetch if the day already has data in Google Sheets.
+
+Set these variables in `.env`:
+
+```bash
+EVOTOR_ENABLED=true
+EVOTOR_TOKEN=
+EVOTOR_BASE_URL=https://api.evotor.ru
+EVOTOR_REVENUE_URL_TEMPLATE=
+EVOTOR_STORE_UUID=
+EVOTOR_TERMINAL_UUID=
+EVOTOR_AUTH_HEADER_NAME=X-Authorization
+```
+
+`EVOTOR_REVENUE_URL_TEMPLATE` supports placeholders:
+
+```text
+{base_url}
+{date}
+{date_from}
+{date_to}
+{store_uuid}
+{terminal_uuid}
+```
+
+The exact URL depends on the Evotor API access/app being used. Keep the token out
+of Git and store it only in `.env` on the server.
+
 ## Commands
 
 - `/start` - greeting
 - `/help` - input format
 - `неделя` - current week statistics
 - `месяц` - current month statistics
+- `эвотор` - fetch today's revenue from Evotor
 - `/employees` - list salary rules from database
 - `/set_salary Имя 2500` - upsert employee salary rule
 

@@ -10,6 +10,9 @@ def main_keyboard() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text="зарплата"),
+                KeyboardButton(text="эвотор"),
+            ],
+            [
                 KeyboardButton(text="помощь"),
             ],
         ],

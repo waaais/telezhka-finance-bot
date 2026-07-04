@@ -133,6 +133,46 @@ async def help_button(message: Message, finance_service: FinanceService) -> None
     await message.answer(help_message(), parse_mode="Markdown", reply_markup=main_keyboard())
 
 
+@router.message(F.text.func(lambda text: _button_text(text) in {"эвотор", "evotor", "касса"}))
+async def evotor_import(
+    message: Message,
+    finance_service: FinanceService,
+    settings: Settings,
+) -> None:
+    await finance_service.remember_chat(message.chat.id)
+    result = await finance_service.import_evotor_revenue(
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        today=current_date(settings.timezone),
+    )
+    if result.parse_error:
+        await message.answer(result.parse_error, reply_markup=main_keyboard())
+        return
+    if result.duplicate:
+        await message.answer(
+            result.response_text or duplicate_message(),
+            reply_markup=main_keyboard(),
+        )
+        return
+    if result.entry is None:
+        await message.answer(
+            "Не смог записать выручку из Эвотора.",
+            reply_markup=main_keyboard(),
+        )
+        return
+    if result.sheet_error:
+        await message.answer(
+            success_with_sheet_warning(result.entry, updated=result.updated),
+            reply_markup=main_keyboard(),
+        )
+        return
+    await message.answer(
+        ("✅ Забрал из Эвотора и обновил\n\n" if result.updated else "✅ Забрал из Эвотора\n\n")
+        + success_message(result.entry).removeprefix("✅ Записал\n\n"),
+        reply_markup=main_keyboard(),
+    )
+
+
 @router.message(F.text)
 async def finance_text(
     message: Message,

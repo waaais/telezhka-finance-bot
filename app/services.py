@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.employees import OTHER_EMPLOYEE_BUCKET, employee_bucket, normalize_employee_group, split_employee_group
+from app.integrations.evotor import EvotorSync
 from app.integrations.google_sheets import SheetSync
 from app.parser.finance_parser import (
     looks_like_no_work,
@@ -45,11 +46,13 @@ class FinanceService:
         settings: Settings,
         salary_engine: SalaryEngine,
         sheet_sync: SheetSync,
+        evotor_sync: EvotorSync,
     ) -> None:
         self.session_factory = session_factory
         self.settings = settings
         self.salary_engine = salary_engine
         self.sheet_sync = sheet_sync
+        self.evotor_sync = evotor_sync
 
     async def seed_default_employees(self) -> None:
         async def operation() -> None:
@@ -408,11 +411,129 @@ class FinanceService:
         return period, await retry_db(operation)
 
     async def has_finance_entry(self, chat_id: int, entry_date: date) -> bool:
+        try:
+            sheet_totals = await self.sheet_sync.aggregate_period(entry_date, entry_date)
+        except Exception:
+            logger.exception(
+                "Failed to check finance entry in Google Sheets",
+                extra={"entry_date": entry_date.isoformat()},
+            )
+            sheet_totals = None
+        if sheet_totals is not None and sheet_totals.get("entries", 0) > 0:
+            return True
+
         async def operation() -> bool:
             async with session_scope(self.session_factory) as session:
                 return await FinanceRepository(session).has_entry_for_chat_date(chat_id, entry_date)
 
         return await retry_db(operation)
+
+    async def import_evotor_revenue(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        today: date,
+        skip_if_exists: bool = False,
+    ) -> ProcessedFinanceResult:
+        if skip_if_exists and await self.has_finance_entry(chat_id, today):
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=True,
+                response_text="☑️ Выручка за сегодня уже есть в таблице, Эвотор не трогаю.",
+            )
+
+        try:
+            evotor_revenue = await self.evotor_sync.fetch_revenue(today)
+        except Exception as exc:
+            logger.exception("Failed to fetch Evotor revenue")
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                parse_error=(
+                    "Не смог получить выручку из Эвотора. "
+                    "Проверьте токен, кассу и настройки EVOTOR_REVENUE_URL_TEMPLATE."
+                ),
+                sheet_error=str(exc),
+            )
+
+        if evotor_revenue is None:
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                parse_error="Интеграция с Эвотором пока выключена в настройках.",
+            )
+
+        try:
+            scheduled_employee = await self.sheet_sync.scheduled_employee_for_date(today)
+        except Exception as exc:
+            logger.exception("Failed to read scheduled employee for Evotor import")
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                parse_error=(
+                    "Выручку из Эвотора получил, но не смог прочитать продавца "
+                    "из расписания в Google Sheets."
+                ),
+                sheet_error=str(exc),
+            )
+
+        if not scheduled_employee:
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                parse_error=(
+                    f"Выручку из Эвотора получил, но на {today:%d.%m.%Y} "
+                    "в расписании нет продавца."
+                ),
+            )
+
+        parsed = ParsedFinanceMessage(
+            employee_name=normalize_employee_group(scheduled_employee),
+            entry_date=today,
+            cash=evotor_revenue.cash,
+            cashless=evotor_revenue.cashless,
+            raw_text=f"evotor:{today.isoformat()}",
+        )
+
+        async def operation() -> ProcessedFinanceResult:
+            async with session_scope(self.session_factory) as session:
+                employees = EmployeeRepository(session)
+                salary = await self._salary_for_employee_group(employees, parsed.employee_name)
+                employee = await employees.get_or_create(parsed.employee_name, salary)
+                stored = await FinanceRepository(session).store_entry_once(
+                    parsed,
+                    employee,
+                    salary,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                )
+                return ProcessedFinanceResult(
+                    entry=stored.entry,
+                    duplicate=stored.duplicate,
+                    parse_error=stored.public_error,
+                    updated=stored.status == "updated",
+                )
+
+        result = await retry_db(operation)
+        if result.entry is None or result.duplicate:
+            return result
+
+        try:
+            await self.sheet_sync.push_entry(result.entry)
+        except Exception as exc:
+            logger.exception(
+                "Failed to sync Evotor entry to Google Sheets",
+                extra={"entry_id": result.entry.id},
+            )
+            return ProcessedFinanceResult(
+                entry=result.entry,
+                duplicate=False,
+                sheet_error=str(exc),
+                updated=result.updated,
+            )
+
+        return result
 
     async def weekly_salary_breakdown(self, today: date) -> tuple[Period, dict[str, int]]:
         period = current_week(today)
