@@ -47,6 +47,16 @@ class SheetSync(Protocol):
     async def scheduled_employee_for_date(self, entry_date: date) -> str | None:
         pass
 
+    async def aggregate_period(self, start_date: date, end_date: date) -> dict[str, int] | None:
+        pass
+
+    async def weekly_salary_breakdown(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, int] | None:
+        pass
+
 
 class DisabledSheetSync:
     async def push_entry(self, entry: FinanceEntry) -> None:
@@ -56,6 +66,16 @@ class DisabledSheetSync:
         return None
 
     async def scheduled_employee_for_date(self, entry_date: date) -> str | None:
+        return None
+
+    async def aggregate_period(self, start_date: date, end_date: date) -> dict[str, int] | None:
+        return None
+
+    async def weekly_salary_breakdown(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, int] | None:
         return None
 
 
@@ -104,6 +124,20 @@ class GoogleSheetsSync:
     async def scheduled_employee_for_date(self, entry_date: date) -> str | None:
         return await asyncio.to_thread(self._scheduled_employee_for_date_sync, entry_date)
 
+    async def aggregate_period(self, start_date: date, end_date: date) -> dict[str, int] | None:
+        return await asyncio.to_thread(self._aggregate_period_sync, start_date, end_date)
+
+    async def weekly_salary_breakdown(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, int] | None:
+        return await asyncio.to_thread(
+            self._weekly_salary_breakdown_sync,
+            start_date,
+            end_date,
+        )
+
     def _push_entry_sync(self, entry: FinanceEntry) -> None:
         worksheet = self._worksheet_for_date(entry.entry_date)
         target_row = self._find_target_row(worksheet, entry.entry_date)
@@ -141,12 +175,73 @@ class GoogleSheetsSync:
             return None
         return normalize_employee_group(employee_name)
 
+    def _aggregate_period_sync(self, start_date: date, end_date: date) -> dict[str, int]:
+        totals = {
+            "cash": 0,
+            "cashless": 0,
+            "revenue": 0,
+            "salaries": 0,
+            "profit": 0,
+            "entries": 0,
+        }
+        for target_row in self._sheet_rows_for_dates(_dates_between(start_date, end_date)):
+            salary = _number(_cell(target_row.values, 2))
+            cash = _number(_cell(target_row.values, 3))
+            cashless = _number(_cell(target_row.values, 4))
+            has_entry = any(value is not None for value in (salary, cash, cashless))
+            if not has_entry:
+                continue
+            totals["cash"] += cash or 0
+            totals["cashless"] += cashless or 0
+            totals["salaries"] += salary or 0
+            totals["entries"] += 1
+        totals["revenue"] = totals["cash"] + totals["cashless"]
+        totals["profit"] = totals["revenue"] - totals["salaries"]
+        return totals
+
+    def _weekly_salary_breakdown_sync(self, start_date: date, end_date: date) -> dict[str, int]:
+        target_dates = _dates_between(start_date, end_date)
+        rows_by_title = self._rows_by_title_for_dates(target_dates)
+        return _weekly_salary_totals_for_dates(
+            rows_by_title,
+            target_dates,
+            default_salary=self.default_salary,
+            low_salary=self.low_salary,
+            low_salary_names=self.low_salary_names,
+        )
+
     def _worksheet_for_date(self, entry_date: date) -> gspread.Worksheet:
         sheet_title = _sheet_title_for_date(entry_date)
         try:
             return self.spreadsheet.worksheet(sheet_title)
         except gspread.WorksheetNotFound as exc:
             raise RuntimeError(f"Sheet tab not found: {sheet_title}") from exc
+
+    def _rows_by_title_for_dates(self, target_dates: list[date]) -> dict[str, list[list[object]]]:
+        rows_by_title: dict[str, list[list[object]]] = {}
+        for target_date in target_dates:
+            sheet_title = _sheet_title_for_date(target_date)
+            if sheet_title in rows_by_title:
+                continue
+            rows_by_title[sheet_title] = self._worksheet_for_date(target_date).get(
+                "A1:H1000",
+                value_render_option="UNFORMATTED_VALUE",
+            )
+        return rows_by_title
+
+    def _sheet_rows_for_dates(self, target_dates: list[date]) -> list[SheetRow]:
+        rows_by_title = self._rows_by_title_for_dates(target_dates)
+        result: list[SheetRow] = []
+        for target_date in target_dates:
+            sheet_title = _sheet_title_for_date(target_date)
+            rows = rows_by_title.get(sheet_title)
+            if rows is None:
+                continue
+            try:
+                result.append(_find_target_row_in_rows(rows, sheet_title, target_date))
+            except RuntimeError:
+                continue
+        return result
 
     def _find_target_row(self, worksheet: gspread.Worksheet, entry_date: date) -> SheetRow:
         rows = worksheet.get("A1:E1000", value_render_option="UNFORMATTED_VALUE")
@@ -258,6 +353,13 @@ def _looks_like_same_date(value: object, target_serial: int) -> bool:
 def _week_dates(entry_date: date) -> list[date]:
     week_start = entry_date - timedelta(days=entry_date.weekday())
     return [week_start + timedelta(days=offset) for offset in range(7)]
+
+
+def _dates_between(start_date: date, end_date: date) -> list[date]:
+    days = (end_date - start_date).days
+    if days < 0:
+        return []
+    return [start_date + timedelta(days=offset) for offset in range(days + 1)]
 
 
 def _find_target_row_in_rows(

@@ -172,3 +172,17 @@ class ParserTest(TestCase):
         )
 
         self.assertEqual(parsed.employee_name, "Ксюша+Дима")
+        self.assertIsNone(parsed.new_employee_name)
+
+    def test_parse_employee_correction(self) -> None:
+        parsed = parse_finance_correction(
+            "измени продавца за 3 июля на Дима",
+            now=date(2026, 7, 10),
+            timezone="Europe/Moscow",
+        )
+
+        self.assertEqual(parsed.entry_date, date(2026, 7, 3))
+        self.assertIsNone(parsed.employee_name)
+        self.assertEqual(parsed.new_employee_name, "Дима")
+        self.assertIsNone(parsed.cash)
+        self.assertIsNone(parsed.cashless)

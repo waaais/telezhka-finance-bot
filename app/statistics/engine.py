@@ -11,10 +11,9 @@ class Period:
 
 def current_week(today: date) -> Period:
     start = today - timedelta(days=today.weekday())
-    return Period(name="неделю", start=start, end=today)
+    return Period(name="неделю", start=start, end=start + timedelta(days=6))
 
 
 def current_month(today: date) -> Period:
     start = today.replace(day=1)
     return Period(name="месяц", start=start, end=today)
-

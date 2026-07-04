@@ -19,6 +19,7 @@ class ParsedFinanceMessage:
 class ParsedFinanceCorrection:
     entry_date: date
     employee_name: str | None
+    new_employee_name: str | None
     cash: int | None
     cashless: int | None
     raw_text: str

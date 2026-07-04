@@ -317,6 +317,10 @@ class FinanceService:
                 )
                 if stored.entry is not None and not stored.duplicate:
                     employees = EmployeeRepository(session)
+                    if correction.new_employee_name:
+                        stored.entry.employee_name = normalize_employee_group(
+                            correction.new_employee_name
+                        )
                     salary = await self._salary_for_employee_group(
                         employees,
                         stored.entry.employee_name,
@@ -383,6 +387,20 @@ class FinanceService:
         return await self._statistics(current_month(today))
 
     async def _statistics(self, period: Period) -> tuple[Period, dict[str, int]]:
+        try:
+            sheet_totals = await self.sheet_sync.aggregate_period(period.start, period.end)
+        except Exception:
+            logger.exception(
+                "Failed to aggregate statistics from Google Sheets",
+                extra={
+                    "period_start": period.start.isoformat(),
+                    "period_end": period.end.isoformat(),
+                },
+            )
+            sheet_totals = None
+        if sheet_totals is not None:
+            return period, sheet_totals
+
         async def operation() -> dict[str, int]:
             async with session_scope(self.session_factory) as session:
                 return await FinanceRepository(session).aggregate(period.start, period.end)
@@ -398,6 +416,19 @@ class FinanceService:
 
     async def weekly_salary_breakdown(self, today: date) -> tuple[Period, dict[str, int]]:
         period = current_week(today)
+        try:
+            sheet_totals = await self.sheet_sync.weekly_salary_breakdown(period.start, period.end)
+        except Exception:
+            logger.exception(
+                "Failed to calculate weekly salary from Google Sheets",
+                extra={
+                    "period_start": period.start.isoformat(),
+                    "period_end": period.end.isoformat(),
+                },
+            )
+            sheet_totals = None
+        if sheet_totals is not None:
+            return period, sheet_totals
 
         async def operation() -> dict[str, int]:
             async with session_scope(self.session_factory) as session:
