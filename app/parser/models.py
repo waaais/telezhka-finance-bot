@@ -24,6 +24,24 @@ class ParsedFinanceCorrection:
     raw_text: str
 
 
+@dataclass(frozen=True)
+class ParsedScheduleEntry:
+    entry_date: date
+    employee_name: str
+
+
+@dataclass(frozen=True)
+class ParsedScheduleMessage:
+    entries: list[ParsedScheduleEntry]
+    raw_text: str
+
+
+@dataclass(frozen=True)
+class ParsedNoWorkMessage:
+    entry_date: date
+    raw_text: str
+
+
 class ParseError(ValueError):
     def __init__(self, public_message: str) -> None:
         super().__init__(public_message)

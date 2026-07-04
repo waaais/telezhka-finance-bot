@@ -12,6 +12,7 @@ from app.bot.formatters import (
     success_message,
     success_with_sheet_warning,
     update_message,
+    weekly_salary_message,
 )
 from app.config import Settings
 from app.parser.finance_parser import current_date
@@ -82,7 +83,23 @@ async def set_salary_command(
 async def week_stats(message: Message, finance_service: FinanceService, settings: Settings) -> None:
     await finance_service.remember_chat(message.chat.id)
     period, totals = await finance_service.statistics_for_week(current_date(settings.timezone))
-    await message.answer(stats_message(period, totals))
+    salary_period, salary_totals = await finance_service.weekly_salary_breakdown(
+        current_date(settings.timezone)
+    )
+    await message.answer(
+        stats_message(period, totals) + "\n\n" + weekly_salary_message(salary_period, salary_totals)
+    )
+
+
+@router.message(F.text.func(lambda text: text and text.strip().lower() in {"зарплата", "зп"}))
+async def salary_stats(
+    message: Message,
+    finance_service: FinanceService,
+    settings: Settings,
+) -> None:
+    await finance_service.remember_chat(message.chat.id)
+    period, totals = await finance_service.weekly_salary_breakdown(current_date(settings.timezone))
+    await message.answer(weekly_salary_message(period, totals))
 
 
 @router.message(F.text.func(lambda text: text and text.strip().lower() == "месяц"))
@@ -123,7 +140,13 @@ async def finance_text(
             )
             return
         if result.sheet_error:
+            if result.response_text:
+                await message.answer(result.response_text)
+                return
             await message.answer(success_with_sheet_warning(result.entry, updated=result.updated))
+            return
+        if result.response_text:
+            await message.answer(result.response_text)
             return
         if result.updated:
             await message.answer(update_message(result.entry))

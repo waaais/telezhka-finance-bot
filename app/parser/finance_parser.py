@@ -2,7 +2,15 @@ import re
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
-from app.parser.models import ParsedFinanceCorrection, ParsedFinanceMessage, ParseError
+from app.employees import normalize_employee_group, normalize_employee_name, split_employee_group
+from app.parser.models import (
+    ParsedFinanceCorrection,
+    ParsedFinanceMessage,
+    ParsedNoWorkMessage,
+    ParsedScheduleEntry,
+    ParsedScheduleMessage,
+    ParseError,
+)
 
 MONTHS = {
     "января": 1,
@@ -37,6 +45,12 @@ CASHLESS_ALIASES = (
     ALIAS_PREFIX + r"(?:безналичные|безнал|картой|карта|терминал|эквайринг|card)"
 )
 NAME_PATTERN = re.compile(r"[А-ЯЁа-яёA-Za-z][а-яёa-zA-ZА-ЯЁ-]{1,40}")
+SCHEDULE_LINE_PATTERN = re.compile(
+    r"^\s*(?:[а-яё]{2}\.?\s+)?"
+    r"(?P<day>\d{1,2})[./-](?P<month>\d{1,2})(?:[./-](?P<year>\d{2,4}))?"
+    r"\s*(?:—|–|-|:)\s*(?P<names>.+?)\s*$",
+    re.IGNORECASE,
+)
 EDIT_WORDS = {
     "измени",
     "изменить",
@@ -78,6 +92,30 @@ def parse_finance_message(text: str, *, now: date, timezone: str) -> ParsedFinan
         cashless=cashless,
         raw_text=text,
     )
+
+
+def looks_like_schedule(text: str) -> bool:
+    return len(_parse_schedule_lines(text, now=date.today(), strict=False)) >= 1
+
+
+def parse_schedule_message(text: str, *, now: date) -> ParsedScheduleMessage:
+    entries = _parse_schedule_lines(text, now=now, strict=True)
+    if not entries:
+        raise ParseError(
+            "Не смог прочитать расписание. Формат строки: `пн. 29.06 — Ксюша`."
+        )
+    return ParsedScheduleMessage(entries=entries, raw_text=text)
+
+
+def looks_like_no_work(text: str) -> bool:
+    normalized = _normalize_text(text).casefold()
+    return bool(re.search(r"\b(?:не\s+работаем|выходной|закрыто)\b", normalized))
+
+
+def parse_no_work_message(text: str, *, now: date) -> ParsedNoWorkMessage:
+    normalized = _normalize_text(text)
+    entry_date, _without_date = _extract_date(normalized, now)
+    return ParsedNoWorkMessage(entry_date=entry_date, raw_text=text)
 
 
 def looks_like_correction(text: str) -> bool:
@@ -218,15 +256,11 @@ def _extract_employee_name(text: str) -> str:
         flags=re.IGNORECASE,
     )
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    names = NAME_PATTERN.findall(cleaned)
-    if not names:
+    employee_group = _extract_employee_group(cleaned)
+    if not employee_group:
         raise ParseError("Не нашел имя сотрудника. Пример: `Ксюша нал 12500 безнал 38640`.")
 
-    ignored = {"нал", "безнал", "cash", "card", "сегодня", "вчера"}
-    for name in names:
-        if name.lower() not in ignored:
-            return _normalize_name(name)
-    raise ParseError("Не смог определить имя сотрудника.")
+    return employee_group
 
 
 def _extract_optional_employee_name(text: str) -> str | None:
@@ -240,12 +274,7 @@ def _extract_optional_employee_name(text: str) -> str | None:
         flags=re.IGNORECASE,
     )
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    names = NAME_PATTERN.findall(cleaned)
-    ignored = {"нал", "безнал", "cash", "card", "сегодня", "вчера"}
-    for name in names:
-        if name.lower() not in ignored:
-            return _normalize_name(name)
-    return None
+    return _extract_employee_group(cleaned)
 
 
 def _remove_amount_phrases(text: str) -> str:
@@ -264,10 +293,56 @@ def _remove_amount_phrases(text: str) -> str:
     return cleaned
 
 
-def _normalize_name(name: str) -> str:
-    name = name.strip()
-    if not name:
-        return name
-    if name.islower():
-        return name[:1].upper() + name[1:]
-    return name
+def _extract_employee_group(text: str) -> str | None:
+    ignored = {"нал", "безнал", "cash", "card", "сегодня", "вчера"}
+    words = NAME_PATTERN.findall(text)
+    if not words and "&" not in text:
+        return None
+
+    if "+" in text:
+        group = normalize_employee_group(text)
+        return group or None
+
+    for word in words:
+        if word.lower() not in ignored:
+            return normalize_employee_name(word)
+    return None
+
+
+def _parse_schedule_lines(text: str, *, now: date, strict: bool) -> list[ParsedScheduleEntry]:
+    entries: list[ParsedScheduleEntry] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = SCHEDULE_LINE_PATTERN.match(stripped)
+        if not match:
+            if strict:
+                raise ParseError(f"Не смог прочитать строку расписания: `{stripped}`.")
+            continue
+
+        employee_names = split_employee_group(match.group("names"))
+        if not employee_names:
+            if strict:
+                raise ParseError(f"Не нашел сотрудника в строке: `{stripped}`.")
+            continue
+
+        try:
+            entry_date = _build_date(
+                int(match.group("day")),
+                int(match.group("month")),
+                match.group("year"),
+                now,
+            )
+        except ParseError:
+            if strict:
+                raise
+            continue
+
+        entries.append(
+            ParsedScheduleEntry(
+                entry_date=entry_date,
+                employee_name="+".join(employee_names),
+            )
+        )
+    return entries

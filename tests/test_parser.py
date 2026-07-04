@@ -3,8 +3,12 @@ from unittest import TestCase
 
 from app.parser.finance_parser import (
     looks_like_correction,
+    looks_like_no_work,
+    looks_like_schedule,
     parse_finance_correction,
     parse_finance_message,
+    parse_no_work_message,
+    parse_schedule_message,
 )
 from app.parser.models import ParseError
 
@@ -54,6 +58,44 @@ class ParserTest(TestCase):
         self.assertEqual(parsed.employee_name, "Ксюша")
         self.assertEqual(parsed.cash, 10000)
         self.assertEqual(parsed.cashless, 22500)
+
+    def test_parse_composite_employee_name(self) -> None:
+        parsed = parse_finance_message(
+            "ксюша+дима нал 500 безнал 1000",
+            now=date(2026, 7, 2),
+            timezone="Europe/Moscow",
+        )
+
+        self.assertEqual(parsed.employee_name, "Ксюша+Дима")
+        self.assertEqual(parsed.cash, 500)
+        self.assertEqual(parsed.cashless, 1000)
+
+    def test_parse_schedule_message(self) -> None:
+        text = (
+            "пн. 29.06 — Ксюша\n"
+            "вт. 30.06 — Настя\n"
+            "пт. 03.07 — Ксюша + Дима\n"
+            "вс. 12.07 — Ксюша + &"
+        )
+
+        self.assertTrue(looks_like_schedule(text))
+        parsed = parse_schedule_message(text, now=date(2026, 7, 4))
+
+        self.assertEqual(len(parsed.entries), 4)
+        self.assertEqual(parsed.entries[0].entry_date, date(2026, 6, 29))
+        self.assertEqual(parsed.entries[0].employee_name, "Ксюша")
+        self.assertEqual(parsed.entries[2].employee_name, "Ксюша+Дима")
+        self.assertEqual(parsed.entries[3].employee_name, "Ксюша+&")
+
+    def test_one_schedule_line_is_schedule(self) -> None:
+        self.assertTrue(looks_like_schedule("пн. 29.06 — Ксюша"))
+
+    def test_parse_no_work_message(self) -> None:
+        self.assertTrue(looks_like_no_work("сегодня не работаем"))
+
+        parsed = parse_no_work_message("сегодня не работаем", now=date(2026, 7, 4))
+
+        self.assertEqual(parsed.entry_date, date(2026, 7, 4))
 
     def test_parse_error_is_public_and_helpful(self) -> None:
         with self.assertRaises(ParseError) as error:
@@ -107,3 +149,12 @@ class ParserTest(TestCase):
         self.assertEqual(parsed.employee_name, "Ксюша")
         self.assertIsNone(parsed.cash)
         self.assertEqual(parsed.cashless, 42000)
+
+    def test_parse_correction_with_composite_employee(self) -> None:
+        parsed = parse_finance_correction(
+            "исправь Ксюша+Дима безнал за 02.07 на 42000",
+            now=date(2026, 7, 10),
+            timezone="Europe/Moscow",
+        )
+
+        self.assertEqual(parsed.employee_name, "Ксюша+Дима")

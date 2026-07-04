@@ -235,6 +235,25 @@ class FinanceRepository:
             "entries": int(row[4]),
         }
 
+    async def has_entry_for_chat_date(self, chat_id: int, entry_date: date) -> bool:
+        stmt = (
+            select(func.count(FinanceEntry.id))
+            .where(FinanceEntry.source_chat_id == chat_id)
+            .where(FinanceEntry.entry_date == entry_date)
+        )
+        count = (await self.session.execute(stmt)).scalar_one()
+        return int(count) > 0
+
+    async def entries_between(self, start_date: date, end_date: date) -> list[FinanceEntry]:
+        stmt: Select[tuple[FinanceEntry]] = (
+            select(FinanceEntry)
+            .where(FinanceEntry.entry_date >= start_date)
+            .where(FinanceEntry.entry_date <= end_date)
+            .order_by(FinanceEntry.entry_date, FinanceEntry.id)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def recent_entries(self, limit: int = 20) -> list[FinanceEntry]:
         stmt: Select[tuple[FinanceEntry]] = (
             select(FinanceEntry).order_by(FinanceEntry.id.desc()).limit(limit)

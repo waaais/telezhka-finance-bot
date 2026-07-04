@@ -9,6 +9,14 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 from app.config import Settings
+from app.employees import (
+    OTHER_EMPLOYEE_BUCKET,
+    SPECIAL_EMPLOYEE_BUCKETS,
+    employee_bucket,
+    normalize_employee_group,
+    split_employee_group,
+)
+from app.parser.models import ParsedScheduleEntry
 from app.storage.models import FinanceEntry
 
 logger = logging.getLogger(__name__)
@@ -28,21 +36,26 @@ RU_MONTHS = {
     11: "НОЯБРЬ",
     12: "ДЕКАБРЬ",
 }
-SPECIAL_EMPLOYEE_BUCKETS = {
-    "ксюша": "КСЮША",
-    "настя": "НАСТЯ",
-    "кристина": "КРИСТИНА",
-}
-OTHER_EMPLOYEE_BUCKET = "&"
-
 
 class SheetSync(Protocol):
     async def push_entry(self, entry: FinanceEntry) -> None:
         pass
 
+    async def push_schedule(self, entries: list[ParsedScheduleEntry]) -> None:
+        pass
+
+    async def scheduled_employee_for_date(self, entry_date: date) -> str | None:
+        pass
+
 
 class DisabledSheetSync:
     async def push_entry(self, entry: FinanceEntry) -> None:
+        return None
+
+    async def push_schedule(self, entries: list[ParsedScheduleEntry]) -> None:
+        return None
+
+    async def scheduled_employee_for_date(self, entry_date: date) -> str | None:
         return None
 
 
@@ -78,9 +91,18 @@ class GoogleSheetsSync:
         credentials = Credentials.from_service_account_file(credentials_file, scopes=SCOPES)
         client = gspread.authorize(credentials)
         self.spreadsheet = client.open_by_key(settings.google_sheets_spreadsheet_id)
+        self.default_salary = settings.default_salary
+        self.low_salary = settings.low_salary
+        self.low_salary_names = {name.casefold() for name in settings.low_salary_names}
 
     async def push_entry(self, entry: FinanceEntry) -> None:
         await asyncio.to_thread(self._push_entry_sync, entry)
+
+    async def push_schedule(self, entries: list[ParsedScheduleEntry]) -> None:
+        await asyncio.to_thread(self._push_schedule_sync, entries)
+
+    async def scheduled_employee_for_date(self, entry_date: date) -> str | None:
+        return await asyncio.to_thread(self._scheduled_employee_for_date_sync, entry_date)
 
     def _push_entry_sync(self, entry: FinanceEntry) -> None:
         worksheet = self._worksheet_for_date(entry.entry_date)
@@ -100,6 +122,24 @@ class GoogleSheetsSync:
         )
 
         self._update_weekly_salary_summary(worksheet, entry.entry_date)
+
+    def _push_schedule_sync(self, entries: list[ParsedScheduleEntry]) -> None:
+        for entry in entries:
+            worksheet = self._worksheet_for_date(entry.entry_date)
+            target_row = self._find_target_row(worksheet, entry.entry_date)
+            worksheet.update(
+                f"B{target_row.row_number}",
+                [[entry.employee_name.upper()]],
+                value_input_option="USER_ENTERED",
+            )
+
+    def _scheduled_employee_for_date_sync(self, entry_date: date) -> str | None:
+        worksheet = self._worksheet_for_date(entry_date)
+        target_row = self._find_target_row(worksheet, entry_date)
+        employee_name = target_row.values[1].strip()
+        if not employee_name:
+            return None
+        return normalize_employee_group(employee_name)
 
     def _worksheet_for_date(self, entry_date: date) -> gspread.Worksheet:
         sheet_title = _sheet_title_for_date(entry_date)
@@ -136,7 +176,13 @@ class GoogleSheetsSync:
             )
             return
 
-        totals = _weekly_salary_totals(rows, block)
+        totals = _weekly_salary_totals(
+            rows,
+            block,
+            default_salary=self.default_salary,
+            low_salary=self.low_salary,
+            low_salary_names=self.low_salary_names,
+        )
         row_to_label = {row_number: label for label, row_number in block.label_rows.items()}
         first_row = min(block.label_rows.values())
         last_row = max(block.label_rows.values())
@@ -221,9 +267,14 @@ def _find_weekly_salary_block(
 def _weekly_salary_totals(
     rows: list[list[object]],
     block: WeeklySalaryBlock,
+    *,
+    default_salary: int = 2500,
+    low_salary: int = 2000,
+    low_salary_names: set[str] | None = None,
 ) -> dict[str, int]:
     totals = {label: 0 for label in SPECIAL_EMPLOYEE_BUCKETS.values()}
     totals[OTHER_EMPLOYEE_BUCKET] = 0
+    low_salary_names = low_salary_names or set(SPECIAL_EMPLOYEE_BUCKETS)
 
     for row_number in range(block.data_start_row, block.data_end_row + 1):
         row = rows[row_number - 1] if row_number - 1 < len(rows) else []
@@ -232,8 +283,14 @@ def _weekly_salary_totals(
         if not employee_name or salary is None:
             continue
 
-        bucket = _employee_bucket(employee_name)
-        totals[bucket] += salary
+        for bucket, part_salary in _split_salary_by_employee_group(
+            str(employee_name),
+            salary,
+            default_salary=default_salary,
+            low_salary=low_salary,
+            low_salary_names=low_salary_names,
+        ):
+            totals[bucket] += part_salary
     return totals
 
 
@@ -251,7 +308,46 @@ def _date_is_inside_rows(
 
 
 def _employee_bucket(value: object) -> str:
-    return SPECIAL_EMPLOYEE_BUCKETS.get(_normalize_text(value), OTHER_EMPLOYEE_BUCKET)
+    return employee_bucket(str(value))
+
+
+def _split_salary_by_employee_group(
+    employee_name: str,
+    total_salary: int,
+    *,
+    default_salary: int,
+    low_salary: int,
+    low_salary_names: set[str],
+) -> list[tuple[str, int]]:
+    employees = split_employee_group(employee_name)
+    if not employees:
+        return [(OTHER_EMPLOYEE_BUCKET, total_salary)]
+    if len(employees) == 1:
+        return [(employee_bucket(employees[0]), total_salary)]
+
+    planned_salaries = [
+        low_salary if employee.casefold() in low_salary_names else default_salary
+        for employee in employees
+    ]
+    planned_total = sum(planned_salaries)
+    if planned_total <= 0:
+        return [(employee_bucket(employee), 0) for employee in employees]
+    if planned_total == total_salary:
+        return [
+            (employee_bucket(employee), salary)
+            for employee, salary in zip(employees, planned_salaries, strict=True)
+        ]
+
+    distributed: list[tuple[str, int]] = []
+    remaining = total_salary
+    for index, employee in enumerate(employees):
+        if index == len(employees) - 1:
+            part_salary = remaining
+        else:
+            part_salary = round(total_salary * planned_salaries[index] / planned_total)
+            remaining -= part_salary
+        distributed.append((employee_bucket(employee), part_salary))
+    return distributed
 
 
 def _weekly_label(value: object) -> str | None:

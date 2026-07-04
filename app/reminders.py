@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 
-from app.bot.formatters import stats_message
+from app.bot.formatters import stats_message, weekly_salary_message
 from app.config import Settings
 from app.services import FinanceService
 
@@ -54,7 +54,7 @@ async def run_daily_revenue_reminders(
         sleep_seconds = max(1, (next_run - datetime.now(timezone)).total_seconds())
         logger.info("Daily revenue reminder scheduled", extra={"next_run": next_run.isoformat()})
         await asyncio.sleep(sleep_seconds)
-        await _send_revenue_reminders(bot, finance_service)
+        await _send_revenue_reminders(bot, finance_service, next_run.date())
 
 
 async def run_weekly_report_reminders(
@@ -101,7 +101,11 @@ async def run_server_payment_reminders(
         await _send_server_payment_reminders(bot, finance_service)
 
 
-async def _send_revenue_reminders(bot: Bot, finance_service: FinanceService) -> None:
+async def _send_revenue_reminders(
+    bot: Bot,
+    finance_service: FinanceService,
+    today: date,
+) -> None:
     chat_ids = await finance_service.reminder_chat_ids()
     if not chat_ids:
         logger.info("No chats for daily revenue reminder")
@@ -109,6 +113,12 @@ async def _send_revenue_reminders(bot: Bot, finance_service: FinanceService) -> 
 
     for chat_id in chat_ids:
         try:
+            if await finance_service.has_finance_entry(chat_id, today):
+                logger.info(
+                    "Daily revenue reminder skipped because entry already exists",
+                    extra={"chat_id": chat_id, "entry_date": today.isoformat()},
+                )
+                continue
             await bot.send_message(chat_id, REMINDER_TEXT, parse_mode="Markdown")
         except Exception:
             logger.exception(
@@ -124,7 +134,13 @@ async def _send_weekly_reports(bot: Bot, finance_service: FinanceService, today:
         return
 
     period, totals = await finance_service.statistics_for_week(today)
-    text = "📅 Еженедельный отчет\n\n" + stats_message(period, totals)
+    salary_period, salary_totals = await finance_service.weekly_salary_breakdown(today)
+    text = (
+        "📅 Еженедельный отчет\n\n"
+        + stats_message(period, totals)
+        + "\n\n"
+        + weekly_salary_message(salary_period, salary_totals)
+    )
     for chat_id in chat_ids:
         try:
             await bot.send_message(chat_id, text)

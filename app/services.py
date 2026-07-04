@@ -5,13 +5,18 @@ from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.employees import OTHER_EMPLOYEE_BUCKET, employee_bucket, normalize_employee_group, split_employee_group
 from app.integrations.google_sheets import SheetSync
 from app.parser.finance_parser import (
+    looks_like_no_work,
     looks_like_correction,
+    looks_like_schedule,
     parse_finance_correction,
     parse_finance_message,
+    parse_no_work_message,
+    parse_schedule_message,
 )
-from app.parser.models import ParseError
+from app.parser.models import ParsedFinanceMessage, ParseError
 from app.retry import retry_db
 from app.salary.engine import SalaryEngine
 from app.statistics.engine import Period, current_month, current_week
@@ -29,6 +34,8 @@ class ProcessedFinanceResult:
     parse_error: str | None = None
     sheet_error: str | None = None
     updated: bool = False
+    response_text: str | None = None
+    schedule_count: int = 0
 
 
 class FinanceService:
@@ -85,6 +92,17 @@ class FinanceService:
         message_id: int,
         today: date,
     ) -> ProcessedFinanceResult:
+        if looks_like_schedule(text):
+            return await self._process_schedule_message(text=text, today=today)
+
+        if looks_like_no_work(text):
+            return await self._process_no_work_message(
+                text=text,
+                chat_id=chat_id,
+                message_id=message_id,
+                today=today,
+            )
+
         if looks_like_correction(text):
             return await self._process_correction_message(
                 text=text,
@@ -111,11 +129,8 @@ class FinanceService:
         async def operation() -> ProcessedFinanceResult:
             async with session_scope(self.session_factory) as session:
                 employees = EmployeeRepository(session)
-                employee = await employees.get_or_create(
-                    parsed.employee_name,
-                    self.settings.default_salary,
-                )
-                salary = self.salary_engine.calculate(employee)
+                salary = await self._salary_for_employee_group(employees, parsed.employee_name)
+                employee = await employees.get_or_create(parsed.employee_name, salary)
                 stored = await FinanceRepository(session).store_entry_once(
                     parsed,
                     employee,
@@ -145,6 +160,124 @@ class FinanceService:
                 entry=result.entry,
                 duplicate=False,
                 parse_error=None,
+                sheet_error=str(exc),
+                updated=result.updated,
+            )
+
+        return result
+
+    async def _process_schedule_message(
+        self,
+        *,
+        text: str,
+        today: date,
+    ) -> ProcessedFinanceResult:
+        try:
+            schedule = parse_schedule_message(text, now=today)
+        except ParseError as exc:
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                parse_error=exc.public_message,
+            )
+
+        try:
+            await self.sheet_sync.push_schedule(schedule.entries)
+        except Exception as exc:
+            logger.exception("Failed to sync schedule to Google Sheets")
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                sheet_error=str(exc),
+                response_text=(
+                    "⚠️ Расписание прочитал, но не смог отправить в Google Sheets. "
+                    "Ошибка записана в лог."
+                ),
+                schedule_count=len(schedule.entries),
+            )
+
+        return ProcessedFinanceResult(
+            entry=None,
+            duplicate=False,
+            schedule_count=len(schedule.entries),
+            response_text=f"✅ Внес расписание в таблицу: {len(schedule.entries)} дней.",
+        )
+
+    async def _process_no_work_message(
+        self,
+        *,
+        text: str,
+        chat_id: int,
+        message_id: int,
+        today: date,
+    ) -> ProcessedFinanceResult:
+        try:
+            parsed_no_work = parse_no_work_message(text, now=today)
+            scheduled_employee = await self.sheet_sync.scheduled_employee_for_date(
+                parsed_no_work.entry_date
+            )
+        except Exception as exc:
+            logger.exception("Failed to read scheduled employee for no-work day")
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                parse_error=(
+                    "Не смог прочитать сотрудника из расписания в таблице. "
+                    "Сначала внесите расписание или напишите день целиком."
+                ),
+                sheet_error=str(exc),
+            )
+
+        if not scheduled_employee:
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                parse_error=(
+                    f"На {parsed_no_work.entry_date:%d.%m.%Y} в расписании нет сотрудника. "
+                    "Сначала внесите расписание."
+                ),
+            )
+
+        parsed = ParsedFinanceMessage(
+            employee_name=normalize_employee_group(scheduled_employee),
+            entry_date=parsed_no_work.entry_date,
+            cash=0,
+            cashless=0,
+            raw_text=text,
+        )
+
+        async def operation() -> ProcessedFinanceResult:
+            async with session_scope(self.session_factory) as session:
+                employees = EmployeeRepository(session)
+                employee = await employees.get_or_create(parsed.employee_name, 0)
+                stored = await FinanceRepository(session).store_entry_once(
+                    parsed,
+                    employee,
+                    0,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                )
+                return ProcessedFinanceResult(
+                    entry=stored.entry,
+                    duplicate=stored.duplicate,
+                    parse_error=stored.public_error,
+                    updated=stored.status == "updated",
+                )
+
+        result = await retry_db(operation)
+        if result.entry is None or result.duplicate:
+            return result
+
+        try:
+            await self.sheet_sync.push_entry(result.entry)
+        except Exception as exc:
+            logger.exception(
+                "Failed to sync no-work entry to Google Sheets",
+                extra={"entry_id": result.entry.id},
+            )
+            return ProcessedFinanceResult(
+                entry=result.entry,
+                duplicate=False,
                 sheet_error=str(exc),
                 updated=result.updated,
             )
@@ -244,6 +377,27 @@ class FinanceService:
 
         return period, await retry_db(operation)
 
+    async def has_finance_entry(self, chat_id: int, entry_date: date) -> bool:
+        async def operation() -> bool:
+            async with session_scope(self.session_factory) as session:
+                return await FinanceRepository(session).has_entry_for_chat_date(chat_id, entry_date)
+
+        return await retry_db(operation)
+
+    async def weekly_salary_breakdown(self, today: date) -> tuple[Period, dict[str, int]]:
+        period = current_week(today)
+
+        async def operation() -> dict[str, int]:
+            async with session_scope(self.session_factory) as session:
+                entries = await FinanceRepository(session).entries_between(period.start, period.end)
+                employees = await EmployeeRepository(session).list_all()
+                salary_by_name = {
+                    employee.name.casefold(): employee.salary_amount for employee in employees
+                }
+                return self._salary_breakdown(entries, salary_by_name)
+
+        return period, await retry_db(operation)
+
     async def list_employees(self) -> list[tuple[str, int]]:
         async def operation() -> list[tuple[str, int]]:
             async with session_scope(self.session_factory) as session:
@@ -259,3 +413,60 @@ class FinanceService:
                 return employee.name, employee.salary_amount
 
         return await retry_db(operation)
+
+    async def _salary_for_employee_group(
+        self,
+        employees: EmployeeRepository,
+        employee_name: str,
+    ) -> int:
+        total = 0
+        for name in split_employee_group(employee_name):
+            if name == OTHER_EMPLOYEE_BUCKET:
+                total += self.settings.default_salary
+                continue
+            employee = await employees.get_or_create(name, self.settings.default_salary)
+            total += self.salary_engine.calculate(employee)
+        return total
+
+    def _salary_breakdown(
+        self,
+        entries: list[FinanceEntry],
+        salary_by_name: dict[str, int],
+    ) -> dict[str, int]:
+        totals = {"КСЮША": 0, "НАСТЯ": 0, "КРИСТИНА": 0, OTHER_EMPLOYEE_BUCKET: 0}
+        for entry in entries:
+            if entry.salary == 0:
+                continue
+            parts = split_employee_group(entry.employee_name)
+            if len(parts) <= 1:
+                bucket = employee_bucket(parts[0] if parts else entry.employee_name)
+                totals[bucket] += entry.salary
+                continue
+
+            planned = [
+                self._configured_salary_for_name(name, salary_by_name)
+                for name in parts
+            ]
+            planned_total = sum(planned)
+            if planned_total == entry.salary:
+                for name, salary in zip(parts, planned, strict=True):
+                    totals[employee_bucket(name)] += salary
+                continue
+            if planned_total <= 0:
+                totals[OTHER_EMPLOYEE_BUCKET] += entry.salary
+                continue
+
+            remaining = entry.salary
+            for index, name in enumerate(parts):
+                if index == len(parts) - 1:
+                    salary = remaining
+                else:
+                    salary = round(entry.salary * planned[index] / planned_total)
+                    remaining -= salary
+                totals[employee_bucket(name)] += salary
+        return totals
+
+    def _configured_salary_for_name(self, name: str, salary_by_name: dict[str, int]) -> int:
+        if name == OTHER_EMPLOYEE_BUCKET:
+            return self.settings.default_salary
+        return salary_by_name.get(name.casefold(), self.settings.default_salary)
