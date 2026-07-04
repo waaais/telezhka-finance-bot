@@ -87,6 +87,20 @@ class ParserTest(TestCase):
         self.assertEqual(parsed.entries[2].employee_name, "Ксюша+Дима")
         self.assertEqual(parsed.entries[3].employee_name, "Ксюша+&")
 
+    def test_parse_schedule_ignores_title_and_treats_question_as_other(self) -> None:
+        text = (
+            "РАСПИСАНИЕ — ИЮЛЬ 1/2\n"
+            "пн. 06.07 — Кристина\n"
+            "вт. 07.07 — Настя\n"
+            "вс. 12.07 — Ксюша + ?"
+        )
+
+        parsed = parse_schedule_message(text, now=date(2026, 7, 4))
+
+        self.assertEqual(len(parsed.entries), 3)
+        self.assertEqual(parsed.entries[0].employee_name, "Кристина")
+        self.assertEqual(parsed.entries[2].employee_name, "Ксюша+&")
+
     def test_one_schedule_line_is_schedule(self) -> None:
         self.assertTrue(looks_like_schedule("пн. 29.06 — Ксюша"))
 

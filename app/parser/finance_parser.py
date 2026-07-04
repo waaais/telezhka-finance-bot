@@ -317,11 +317,10 @@ def _parse_schedule_lines(text: str, *, now: date, strict: bool) -> list[ParsedS
             continue
         match = SCHEDULE_LINE_PATTERN.match(stripped)
         if not match:
-            if strict:
-                raise ParseError(f"Не смог прочитать строку расписания: `{stripped}`.")
             continue
 
-        employee_names = split_employee_group(match.group("names"))
+        names_text = match.group("names").replace("?", "&")
+        employee_names = split_employee_group(names_text)
         if not employee_names:
             if strict:
                 raise ParseError(f"Не нашел сотрудника в строке: `{stripped}`.")

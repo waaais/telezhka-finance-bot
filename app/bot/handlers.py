@@ -134,19 +134,16 @@ async def finance_text(
         if result.parse_error:
             await message.answer(result.parse_error, parse_mode="Markdown")
             return
+        if result.response_text:
+            await message.answer(result.response_text)
+            return
         if result.entry is None:
             await message.answer(
                 "Не смог записать сообщение. Попробуйте еще раз или проверьте формат."
             )
             return
         if result.sheet_error:
-            if result.response_text:
-                await message.answer(result.response_text)
-                return
             await message.answer(success_with_sheet_warning(result.entry, updated=result.updated))
-            return
-        if result.response_text:
-            await message.answer(result.response_text)
             return
         if result.updated:
             await message.answer(update_message(result.entry))
