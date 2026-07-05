@@ -501,9 +501,19 @@ class FinanceService:
         async def operation() -> ProcessedFinanceResult:
             async with session_scope(self.session_factory) as session:
                 employees = EmployeeRepository(session)
-                salary = await self._salary_for_employee_group(employees, parsed.employee_name)
+                finance_entries = FinanceRepository(session)
+                existing_entries = await finance_entries.entries_between(today, today)
+                is_no_work_day = any(
+                    entry.salary == 0 and looks_like_no_work(entry.raw_text)
+                    for entry in existing_entries
+                )
+                salary = (
+                    0
+                    if is_no_work_day
+                    else await self._salary_for_employee_group(employees, parsed.employee_name)
+                )
                 employee = await employees.get_or_create(parsed.employee_name, salary)
-                stored = await FinanceRepository(session).store_entry_once(
+                stored = await finance_entries.store_entry_once(
                     parsed,
                     employee,
                     salary,
