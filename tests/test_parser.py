@@ -59,6 +59,51 @@ class ParserTest(TestCase):
         self.assertEqual(parsed.cash, 10000)
         self.assertEqual(parsed.cashless, 22500)
 
+    def test_parse_revenue_for_previous_weekday(self) -> None:
+        parsed = parse_finance_message(
+            "выручка за пятницу Ксюша нал 13000 безнал 28000",
+            now=date(2026, 7, 6),
+            timezone="Europe/Moscow",
+        )
+
+        self.assertEqual(parsed.employee_name, "Ксюша")
+        self.assertEqual(parsed.entry_date, date(2026, 7, 3))
+        self.assertEqual(parsed.cash, 13000)
+        self.assertEqual(parsed.cashless, 28000)
+
+    def test_parse_revenue_for_abbreviated_weekday(self) -> None:
+        parsed = parse_finance_message(
+            "выручка за пт. Настя нал 13000 безнал 28000",
+            now=date(2026, 7, 6),
+            timezone="Europe/Moscow",
+        )
+
+        self.assertEqual(parsed.employee_name, "Настя")
+        self.assertEqual(parsed.entry_date, date(2026, 7, 3))
+
+    def test_parse_revenue_for_numeric_date(self) -> None:
+        parsed = parse_finance_message(
+            "выручка за 03.07 Ксюша нал 13000 безнал 28000",
+            now=date(2026, 7, 6),
+            timezone="Europe/Moscow",
+        )
+
+        self.assertEqual(parsed.employee_name, "Ксюша")
+        self.assertEqual(parsed.entry_date, date(2026, 7, 3))
+
+    def test_parse_today_typo_and_missing_employee_when_allowed(self) -> None:
+        parsed = parse_finance_message(
+            "сегорлня нал 13000 безнал 28000",
+            now=date(2026, 7, 6),
+            timezone="Europe/Moscow",
+            allow_missing_employee=True,
+        )
+
+        self.assertEqual(parsed.employee_name, "")
+        self.assertEqual(parsed.entry_date, date(2026, 7, 6))
+        self.assertEqual(parsed.cash, 13000)
+        self.assertEqual(parsed.cashless, 28000)
+
     def test_parse_composite_employee_name(self) -> None:
         parsed = parse_finance_message(
             "ксюша+дима нал 500 безнал 1000",

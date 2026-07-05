@@ -39,6 +39,33 @@ MONTHS = {
     "декабрь": 12,
 }
 
+WEEKDAYS = {
+    "пн": 0,
+    "понедельник": 0,
+    "понедельника": 0,
+    "вт": 1,
+    "вторник": 1,
+    "вторника": 1,
+    "ср": 2,
+    "среда": 2,
+    "среду": 2,
+    "среды": 2,
+    "чт": 3,
+    "четверг": 3,
+    "четверга": 3,
+    "пт": 4,
+    "пятница": 4,
+    "пятницу": 4,
+    "пятницы": 4,
+    "сб": 5,
+    "суббота": 5,
+    "субботу": 5,
+    "субботы": 5,
+    "вс": 6,
+    "воскресенье": 6,
+    "воскресенья": 6,
+}
+
 ALIAS_PREFIX = r"(?<![А-ЯЁа-яёA-Za-z])"
 CASH_ALIASES = ALIAS_PREFIX + r"(?:наличка|наличку|наличные|нал|кэш|cash)"
 CASHLESS_ALIASES = (
@@ -74,9 +101,23 @@ RU_DATE_PATTERN = re.compile(
     + r")(?:\s+(?P<year>\d{2,4}))?\b",
     re.IGNORECASE,
 )
+TODAY_PATTERN = re.compile(r"\b(?:сегодня|сегодн[яа]|сегорлня|сеголня)\b", re.IGNORECASE)
+YESTERDAY_PATTERN = re.compile(r"\bвчера\b", re.IGNORECASE)
+WEEKDAY_PATTERN = re.compile(
+    r"(?:\bза\s+)?\b(?P<weekday>"
+    + "|".join(WEEKDAYS.keys())
+    + r")(?:\.(?=\s|$)|\b)",
+    re.IGNORECASE,
+)
 
 
-def parse_finance_message(text: str, *, now: date, timezone: str) -> ParsedFinanceMessage:
+def parse_finance_message(
+    text: str,
+    *,
+    now: date,
+    timezone: str,
+    allow_missing_employee: bool = False,
+) -> ParsedFinanceMessage:
     normalized = _normalize_text(text)
     if not normalized:
         raise ParseError("Не вижу данных. Пришлите, например: `Ксюша нал 12500 безнал 38640`.")
@@ -84,7 +125,10 @@ def parse_finance_message(text: str, *, now: date, timezone: str) -> ParsedFinan
     entry_date, without_date = _extract_date(normalized, now)
     cash = _extract_amount(without_date, CASH_ALIASES, "наличку")
     cashless = _extract_amount(without_date, CASHLESS_ALIASES, "безнал")
-    employee_name = _extract_employee_name(without_date)
+    employee_name = _extract_employee_name(
+        without_date,
+        allow_missing=allow_missing_employee,
+    )
 
     return ParsedFinanceMessage(
         employee_name=employee_name,
@@ -161,11 +205,12 @@ def _normalize_text(text: str) -> str:
 
 
 def _extract_date(text: str, now: date) -> tuple[date, str]:
-    lowered = text.lower()
-    if "сегодня" in lowered:
-        return now, re.sub(r"\bсегодня\b", " ", text, flags=re.IGNORECASE)
-    if "вчера" in lowered:
-        return now - timedelta(days=1), re.sub(r"\bвчера\b", " ", text, flags=re.IGNORECASE)
+    today_match = TODAY_PATTERN.search(text)
+    if today_match:
+        return now, TODAY_PATTERN.sub(" ", text, count=1)
+    yesterday_match = YESTERDAY_PATTERN.search(text)
+    if yesterday_match:
+        return now - timedelta(days=1), YESTERDAY_PATTERN.sub(" ", text, count=1)
 
     iso_match = ISO_DATE_PATTERN.search(text)
     if iso_match:
@@ -187,6 +232,13 @@ def _extract_date(text: str, now: date) -> tuple[date, str]:
             now,
         )
         return parsed, text[: ru_match.start()] + " " + text[ru_match.end() :]
+
+    weekday_match = WEEKDAY_PATTERN.search(text)
+    if weekday_match:
+        weekday = WEEKDAYS[weekday_match.group("weekday").casefold()]
+        days_ago = (now.weekday() - weekday) % 7
+        parsed = now - timedelta(days=days_ago)
+        return parsed, text[: weekday_match.start()] + " " + text[weekday_match.end() :]
 
     return now, text
 
@@ -265,7 +317,7 @@ def _parse_amount(amount_text: str, human_name: str) -> int:
     return amount
 
 
-def _extract_employee_name(text: str) -> str:
+def _extract_employee_name(text: str, *, allow_missing: bool = False) -> str:
     cleaned = re.sub(rf"{CASH_ALIASES}\s*[:=-]?\s*\d[\d\s.,]*", " ", text, flags=re.IGNORECASE)
     cleaned = re.sub(
         rf"{CASHLESS_ALIASES}\s*[:=-]?\s*\d[\d\s.,]*",
@@ -276,6 +328,8 @@ def _extract_employee_name(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     employee_group = _extract_employee_group(cleaned)
     if not employee_group:
+        if allow_missing:
+            return ""
         raise ParseError("Не нашел имя сотрудника. Пример: `Ксюша нал 12500 безнал 38640`.")
 
     return employee_group
@@ -318,7 +372,22 @@ def _remove_amount_phrases(text: str) -> str:
 
 
 def _extract_employee_group(text: str) -> str | None:
-    ignored = {"нал", "безнал", "cash", "card", "сегодня", "вчера"}
+    ignored = {
+        "нал",
+        "безнал",
+        "cash",
+        "card",
+        "сегодня",
+        "сегодняа",
+        "сегорлня",
+        "сеголня",
+        "вчера",
+        "выручка",
+        "за",
+        "день",
+        "смена",
+        "смену",
+    } | set(WEEKDAYS.keys())
     words = NAME_PATTERN.findall(text)
     if not words and "&" not in text:
         return None

@@ -115,7 +115,28 @@ class FinanceService:
             )
 
         try:
-            parsed = parse_finance_message(text, now=today, timezone=self.settings.timezone)
+            parsed = parse_finance_message(
+                text,
+                now=today,
+                timezone=self.settings.timezone,
+                allow_missing_employee=True,
+            )
+            if not parsed.employee_name:
+                scheduled_employee = await self.sheet_sync.scheduled_employee_for_date(
+                    parsed.entry_date
+                )
+                if not scheduled_employee:
+                    raise ParseError(
+                        f"На {parsed.entry_date:%d.%m.%Y} в расписании нет сотрудника. "
+                        "Напишите имя в сообщении или сначала внесите расписание."
+                    )
+                parsed = ParsedFinanceMessage(
+                    employee_name=normalize_employee_group(scheduled_employee),
+                    entry_date=parsed.entry_date,
+                    cash=parsed.cash,
+                    cashless=parsed.cashless,
+                    raw_text=text,
+                )
         except ParseError as exc:
             await self._remember_parse_error(
                 chat_id=chat_id,
@@ -127,6 +148,24 @@ class FinanceService:
                 entry=None,
                 duplicate=False,
                 parse_error=exc.public_message,
+            )
+        except Exception as exc:
+            logger.exception("Failed to read scheduled employee for finance entry")
+            error_text = (
+                "Не смог прочитать сотрудника из расписания в таблице. "
+                "Напишите имя в сообщении или проверьте Google Sheets."
+            )
+            await self._remember_parse_error(
+                chat_id=chat_id,
+                message_id=message_id,
+                raw_text=text,
+                error_text=error_text,
+            )
+            return ProcessedFinanceResult(
+                entry=None,
+                duplicate=False,
+                parse_error=error_text,
+                sheet_error=str(exc),
             )
 
         async def operation() -> ProcessedFinanceResult:
