@@ -6,6 +6,7 @@ from app.integrations.evotor_token_receiver import (
     extract_token,
     load_receipts,
     load_token,
+    looks_like_receipt_payload,
     save_receipt,
     save_token,
 )
@@ -47,6 +48,7 @@ class EvotorTokenReceiverTest(TestCase):
                 receipts_file,
                 {
                     "secret": "callback-secret",
+                    "token": "callback-token",
                     "deviceId": "terminal-1",
                     "totalAmount": 1200,
                 },
@@ -56,4 +58,20 @@ class EvotorTokenReceiverTest(TestCase):
             self.assertEqual(len(receipts), 1)
             self.assertIn("received_at", receipts[0])
             self.assertNotIn("secret", receipts[0]["payload"])
+            self.assertNotIn("token", receipts[0]["payload"])
             self.assertEqual(receipts[0]["payload"]["totalAmount"], 1200)
+
+    def test_receipt_payload_is_detected_inside_items(self) -> None:
+        self.assertTrue(
+            looks_like_receipt_payload(
+                {
+                    "items": [
+                        {
+                            "deviceId": "terminal-1",
+                            "dateTime": "2026-07-05T12:00:00+03:00",
+                            "totalAmount": 1200,
+                        }
+                    ]
+                }
+            )
+        )

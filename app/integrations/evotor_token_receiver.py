@@ -29,6 +29,20 @@ SECRET_KEYS = {
     "callback_token",
     "callbacktoken",
 }
+RECEIPT_KEYS = {
+    "dateTime".casefold(),
+    "datetime",
+    "date",
+    "createdAt".casefold(),
+    "totalAmount".casefold(),
+    "total_amount",
+    "paymentSource".casefold(),
+    "payments",
+    "payment",
+    "deviceId".casefold(),
+    "device_id",
+    "type",
+}
 
 
 async def start_evotor_token_receiver(settings: Settings) -> web.AppRunner | None:
@@ -79,6 +93,10 @@ async def receive_evotor_token(request: web.Request) -> web.Response:
 
     token = extract_token(data)
     if not token:
+        if settings.evotor_receipts_enabled and looks_like_receipt_payload(data):
+            save_receipt(settings.evotor_receipts_file, data)
+            logger.info("Evotor receipt saved from token callback path")
+            return web.json_response({"ok": True, "kind": "receipt"})
         logger.warning("Evotor token callback does not contain token")
         return web.json_response({"ok": False, "error": "token_not_found"}, status=400)
 
@@ -169,7 +187,7 @@ def _is_authorized(request: web.Request, data: dict[str, Any], expected_secret: 
         request.headers.get("X-Evotor-Authorization", ""),
         request.headers.get("X-Evotor-Token", ""),
         request.headers.get("Authorization", "").removeprefix("Bearer ").strip(),
-        str(_find_value_by_keys(data, SECRET_KEYS) or ""),
+        str(_find_value_by_keys(data, SECRET_KEYS | TOKEN_KEYS) or ""),
     ]
     return any(candidate.strip() == expected for candidate in candidates)
 
@@ -198,7 +216,7 @@ def _remove_secret_fields(data: Any) -> Any:
         clean: dict[str, Any] = {}
         for key, value in data.items():
             normalized_key = str(key).replace("-", "_").casefold()
-            if normalized_key in SECRET_KEYS:
+            if normalized_key in SECRET_KEYS | TOKEN_KEYS:
                 continue
             clean[key] = _remove_secret_fields(value)
         return clean
@@ -223,6 +241,17 @@ def _find_value_by_keys(data: Any, keys: set[str]) -> Any:
             if nested:
                 return nested
     return None
+
+
+def looks_like_receipt_payload(data: Any) -> bool:
+    if isinstance(data, dict):
+        normalized_keys = {str(key).replace("-", "_").casefold() for key in data}
+        if normalized_keys & RECEIPT_KEYS:
+            return True
+        return any(looks_like_receipt_payload(value) for value in data.values())
+    if isinstance(data, list):
+        return any(looks_like_receipt_payload(item) for item in data)
+    return False
 
 
 def _normalize_path(value: str) -> str:
