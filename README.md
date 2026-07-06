@@ -191,7 +191,7 @@ EVOTOR_RECEIPTS_FILE=./data/evotor-receipts.jsonl
 
 In the Evotor developer cabinet, set:
 
-- `URL`: `http://SERVER_IP:8080/evotor/token`
+- `URL`: `http://SERVER_IP/evotor/token`
 - authorization type: `Ваш токен`
 - `Ваш токен`: the same value as `EVOTOR_CALLBACK_SECRET`
 
@@ -199,13 +199,22 @@ In the Evotor developer cabinet, set:
 
 Use the `Чеки (ver.2)` integration block to push every receipt to the bot:
 
-- `URL`: `http://SERVER_IP:8080/evotor/receipts`
+- `URL`: `http://SERVER_IP/evotor/receipts`
 - authorization token: the same value as `EVOTOR_CALLBACK_SECRET`
 - enable fields: `type`, `storeId`, `deviceId`, `dateTime`, `totalAmount`, `paymentSource`
 
 The bot filters receipts by `EVOTOR_TERMINAL_UUID`. For the current cash register,
 this can be the KKM/device value from Evotor, for example `00307900861869`.
 The `Документы с терминала` block is not required for daily revenue sync.
+
+Server checks:
+
+- `http://SERVER_IP/health` must return `{"status":"ok"}`;
+- `http://SERVER_IP/evotor/status` shows whether the token was received and how many receipts reached the bot.
+
+If port `80` is handled by nginx, use `deploy/nginx/telezhka.conf` as the proxy
+config and reload nginx. Evotor should call nginx on port `80`, and nginx should
+forward `/health` and `/evotor/*` to the bot on local port `8080`.
 
 If Evotor requires HTTPS for the callback URL, put a domain and HTTPS reverse proxy
 in front of the bot, then use `https://YOUR_DOMAIN/evotor/token`.

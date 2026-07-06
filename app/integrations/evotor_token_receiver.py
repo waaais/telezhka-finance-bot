@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +57,7 @@ async def start_evotor_token_receiver(settings: Settings) -> web.AppRunner | Non
     callback_path = _normalize_path(settings.evotor_callback_path)
     receipts_path = _normalize_path(settings.evotor_receipts_path)
     app.router.add_get("/health", healthcheck)
+    app.router.add_get("/evotor/status", evotor_status)
     if settings.evotor_token_receiver_enabled:
         app.router.add_get(callback_path, receive_evotor_token)
         app.router.add_post(callback_path, receive_evotor_token)
@@ -82,6 +83,11 @@ async def start_evotor_token_receiver(settings: Settings) -> web.AppRunner | Non
 
 async def healthcheck(_request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
+
+
+async def evotor_status(request: web.Request) -> web.Response:
+    settings: Settings = request.app["settings"]
+    return web.json_response(evotor_status_payload(settings))
 
 
 async def receive_evotor_token(request: web.Request) -> web.Response:
@@ -122,7 +128,7 @@ def save_token(token_file: str, token: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "token": token,
-        "received_at": datetime.now(timezone.utc).isoformat(),
+        "received_at": datetime.now(UTC).isoformat(),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -131,7 +137,7 @@ def save_receipt(receipts_file: str, payload: Any) -> None:
     path = Path(receipts_file)
     path.parent.mkdir(parents=True, exist_ok=True)
     envelope = {
-        "received_at": datetime.now(timezone.utc).isoformat(),
+        "received_at": datetime.now(UTC).isoformat(),
         "payload": _remove_secret_fields(payload),
     }
     with path.open("a", encoding="utf-8") as file:
@@ -154,7 +160,10 @@ def load_receipts(receipts_file: str) -> list[dict[str, Any]]:
                 if isinstance(payload, dict):
                     receipts.append(payload)
     except (OSError, json.JSONDecodeError):
-        logger.exception("Failed to read Evotor receipts file", extra={"receipts_file": receipts_file})
+        logger.exception(
+            "Failed to read Evotor receipts file",
+            extra={"receipts_file": receipts_file},
+        )
         return []
     return receipts
 
@@ -170,6 +179,24 @@ def load_token(token_file: str) -> str:
         return ""
     token = payload.get("token")
     return str(token).strip() if token else ""
+
+
+def evotor_status_payload(settings: Settings) -> dict[str, Any]:
+    receipts = load_receipts(settings.evotor_receipts_file)
+    last_receipt = receipts[-1] if receipts else {}
+    last_payload = last_receipt.get("payload", {}) if isinstance(last_receipt, dict) else {}
+    return {
+        "status": "ok",
+        "token_received": bool(load_token(settings.evotor_token_file)),
+        "receipts_enabled": settings.evotor_receipts_enabled,
+        "receipts_count": len(receipts),
+        "last_receipt_at": (
+            last_receipt.get("received_at", "") if isinstance(last_receipt, dict) else ""
+        ),
+        "last_receipt_keys": sorted(str(key) for key in last_payload.keys())
+        if isinstance(last_payload, dict)
+        else [],
+    }
 
 
 def extract_token(data: dict[str, Any]) -> str:
@@ -206,9 +233,26 @@ async def _request_data(request: web.Request) -> dict[str, Any]:
             elif isinstance(body, list):
                 data["items"] = body
         else:
-            form = await request.post()
-            data.update({key: value for key, value in form.items()})
+            raw_body = await request.text()
+            body = _parse_raw_body(raw_body)
+            if isinstance(body, dict):
+                data.update(body)
+            elif isinstance(body, list):
+                data["items"] = body
+            else:
+                form = await request.post()
+                data.update({key: value for key, value in form.items()})
     return data
+
+
+def _parse_raw_body(raw_body: str) -> Any:
+    text = raw_body.strip()
+    if not text or text[0] not in "[{":
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
 
 
 def _remove_secret_fields(data: Any) -> Any:

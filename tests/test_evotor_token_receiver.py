@@ -3,6 +3,8 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from app.integrations.evotor_token_receiver import (
+    _parse_raw_body,
+    evotor_status_payload,
     extract_token,
     load_receipts,
     load_token,
@@ -75,3 +77,46 @@ class EvotorTokenReceiverTest(TestCase):
                 }
             )
         )
+
+    def test_parse_raw_json_body_with_text_content_type(self) -> None:
+        self.assertEqual(
+            _parse_raw_body('{"deviceId":"terminal-1","totalAmount":120}'),
+            {"deviceId": "terminal-1", "totalAmount": 120},
+        )
+        self.assertEqual(
+            _parse_raw_body('[{"deviceId":"terminal-1"}]'),
+            [{"deviceId": "terminal-1"}],
+        )
+        self.assertIsNone(_parse_raw_body("not json"))
+
+    def test_status_payload_does_not_expose_secrets(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            token_file = f"{tmpdir}/evotor-token.json"
+            receipts_file = f"{tmpdir}/evotor-receipts.jsonl"
+            save_token(token_file, "secret-token")
+            save_receipt(
+                receipts_file,
+                {
+                    "token": "secret-token",
+                    "deviceId": "terminal-1",
+                    "totalAmount": 120,
+                },
+            )
+
+            payload = evotor_status_payload(
+                type(
+                    "SettingsStub",
+                    (),
+                    {
+                        "evotor_token_file": token_file,
+                        "evotor_receipts_file": receipts_file,
+                        "evotor_receipts_enabled": True,
+                    },
+                )()
+            )
+
+            self.assertTrue(payload["token_received"])
+            self.assertTrue(payload["receipts_enabled"])
+            self.assertEqual(payload["receipts_count"], 1)
+            self.assertIn("deviceId", payload["last_receipt_keys"])
+            self.assertNotIn("token", payload["last_receipt_keys"])
