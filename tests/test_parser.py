@@ -156,6 +156,21 @@ class ParserTest(TestCase):
 
         self.assertEqual(parsed.entry_date, date(2026, 7, 4))
 
+    def test_parse_no_work_tomorrow(self) -> None:
+        parsed = parse_no_work_message("завтра не работаем", now=date(2026, 7, 10))
+
+        self.assertEqual(parsed.entry_date, date(2026, 7, 11))
+
+    def test_parse_no_work_after_tomorrow(self) -> None:
+        parsed = parse_no_work_message("послезавтра не работаем", now=date(2026, 7, 10))
+
+        self.assertEqual(parsed.entry_date, date(2026, 7, 12))
+
+    def test_parse_no_work_numeric_future_date(self) -> None:
+        parsed = parse_no_work_message("12.08 не работаем", now=date(2026, 7, 10))
+
+        self.assertEqual(parsed.entry_date, date(2026, 8, 12))
+
     def test_parse_error_is_public_and_helpful(self) -> None:
         with self.assertRaises(ParseError) as error:
             parse_finance_message("Настя нал 1000", now=date(2026, 7, 2), timezone="Europe/Moscow")
@@ -231,3 +246,13 @@ class ParserTest(TestCase):
         self.assertEqual(parsed.new_employee_name, "Дима")
         self.assertIsNone(parsed.cash)
         self.assertIsNone(parsed.cashless)
+
+    def test_parse_employee_correction_with_typo(self) -> None:
+        parsed = parse_finance_correction(
+            "измени продаца 02.07 на Дима",
+            now=date(2026, 7, 10),
+            timezone="Europe/Moscow",
+        )
+
+        self.assertEqual(parsed.entry_date, date(2026, 7, 2))
+        self.assertEqual(parsed.new_employee_name, "Дима")

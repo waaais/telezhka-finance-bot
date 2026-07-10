@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     )
     admin_chat_ids: str = Field(default="", alias="ADMIN_CHAT_IDS")
     timezone: str = Field(default="Europe/Moscow", alias="TIMEZONE")
+    schedule_reminder_enabled: bool = Field(default=True, alias="SCHEDULE_REMINDER_ENABLED")
+    schedule_reminder_time: str = Field(default="09:00", alias="SCHEDULE_REMINDER_TIME")
     daily_reminder_enabled: bool = Field(default=True, alias="DAILY_REMINDER_ENABLED")
     daily_reminder_time: str = Field(default="22:10", alias="DAILY_REMINDER_TIME")
     weekly_report_enabled: bool = Field(default=True, alias="WEEKLY_REPORT_ENABLED")
@@ -79,6 +81,10 @@ class Settings(BaseSettings):
             if value:
                 ids.add(int(value))
         return ids
+
+    @property
+    def schedule_reminder_hour_minute(self) -> tuple[int, int]:
+        return _parse_hour_minute(self.schedule_reminder_time, "SCHEDULE_REMINDER_TIME")
 
     @property
     def reminder_hour_minute(self) -> tuple[int, int]:

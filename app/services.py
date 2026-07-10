@@ -5,12 +5,17 @@ from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.employees import OTHER_EMPLOYEE_BUCKET, employee_bucket, normalize_employee_group, split_employee_group
+from app.employees import (
+    OTHER_EMPLOYEE_BUCKET,
+    employee_bucket,
+    normalize_employee_group,
+    split_employee_group,
+)
 from app.integrations.evotor import EvotorSync
 from app.integrations.google_sheets import SheetSync
 from app.parser.finance_parser import (
-    looks_like_no_work,
     looks_like_correction,
+    looks_like_no_work,
     looks_like_schedule,
     parse_finance_correction,
     parse_finance_message,
@@ -86,6 +91,9 @@ class FinanceService:
                 return await ReminderChatRepository(session).enabled_chat_ids()
 
         return await retry_db(operation)
+
+    async def scheduled_employee_for_date(self, entry_date: date) -> str | None:
+        return await self.sheet_sync.scheduled_employee_for_date(entry_date)
 
     async def process_text_message(
         self,

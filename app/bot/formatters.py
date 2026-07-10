@@ -1,3 +1,5 @@
+from datetime import date
+
 from app.statistics.engine import Period
 from app.storage.models import FinanceEntry
 
@@ -41,7 +43,12 @@ def success_with_sheet_warning(entry: FinanceEntry, *, updated: bool = False) ->
     )
 
 
-def daily_evotor_summary(entry: FinanceEntry, *, updated: bool = False, sheet_error: bool = False) -> str:
+def daily_evotor_summary(
+    entry: FinanceEntry,
+    *,
+    updated: bool = False,
+    sheet_error: bool = False,
+) -> str:
     action = "обновил" if updated else "записал"
     text = (
         "📊 Сводка за сегодня\n\n"
@@ -58,6 +65,31 @@ def daily_evotor_summary(entry: FinanceEntry, *, updated: bool = False, sheet_er
     return text
 
 
+def daily_staff_reminder_message(
+    day: date,
+    employee_name: str | None,
+    *,
+    sheet_error: bool = False,
+) -> str:
+    if sheet_error:
+        return (
+            "👤 Кто работает сегодня\n\n"
+            f"📅 {day:%d.%m.%Y}\n"
+            "⚠️ Не смог прочитать расписание в Google Sheets."
+        )
+    if not employee_name:
+        return (
+            "👤 Кто работает сегодня\n\n"
+            f"📅 {day:%d.%m.%Y}\n"
+            "⚠️ В расписании на сегодня сотрудник не указан."
+        )
+    return (
+        "👤 Кто работает сегодня\n\n"
+        f"📅 {day:%d.%m.%Y}\n"
+        f"👷 {employee_name}"
+    )
+
+
 def duplicate_message() -> str:
     return "☑️ Это сообщение уже было обработано, дубль не записываю."
 
@@ -70,8 +102,12 @@ def help_message() -> str:
         "`Ксюша+Дима нал 12500 безнал 38640`\n"
         "`2 июля Настя нал 14000 безнал 42000`\n"
         "`сегодня Кристина наличка 10 000 карта 22 500`\n"
+        "`выручка за пятницу нал 13000 безнал 28000`\n"
         "`сегодня не работаем`\n"
-        "`измени наличку за 2 июля на 19000`\n\n"
+        "`завтра не работаем`\n"
+        "`12.08 не работаем`\n"
+        "`измени наличку за 2 июля на 19000`\n"
+        "`измени продавца сегодня на Дима`\n\n"
         "Расписание можно прислать списком: `пн. 29.06 — Ксюша`.\n"
         "Эвотор: `эвотор` — забрать сегодняшнюю выручку из кассы.\n"
         "Отчеты: `неделя`, `месяц`, `зарплата`."

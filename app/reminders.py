@@ -8,6 +8,7 @@ from aiogram import Bot
 
 from app.bot.formatters import (
     daily_evotor_summary,
+    daily_staff_reminder_message,
     stats_message,
     weekly_salary_message,
 )
@@ -34,10 +35,32 @@ async def run_scheduled_notifications(
     settings: Settings,
 ) -> None:
     await asyncio.gather(
+        run_daily_staff_reminders(bot, finance_service, settings),
         run_daily_revenue_reminders(bot, finance_service, settings),
         run_weekly_report_reminders(bot, finance_service, settings),
         run_server_payment_reminders(bot, finance_service, settings),
     )
+
+
+async def run_daily_staff_reminders(
+    bot: Bot,
+    finance_service: FinanceService,
+    settings: Settings,
+) -> None:
+    if not settings.schedule_reminder_enabled:
+        logger.info("Daily staff reminders are disabled")
+        return
+
+    timezone = ZoneInfo(settings.timezone)
+    while True:
+        next_run = _next_reminder_at(
+            now=datetime.now(timezone),
+            hour_minute=settings.schedule_reminder_hour_minute,
+        )
+        sleep_seconds = max(1, (next_run - datetime.now(timezone)).total_seconds())
+        logger.info("Daily staff reminder scheduled", extra={"next_run": next_run.isoformat()})
+        await asyncio.sleep(sleep_seconds)
+        await _send_daily_staff_reminders(bot, finance_service, next_run.date())
 
 
 async def run_daily_revenue_reminders(
@@ -103,6 +126,33 @@ async def run_server_payment_reminders(
         logger.info("Server payment reminder scheduled", extra={"next_run": next_run.isoformat()})
         await asyncio.sleep(sleep_seconds)
         await _send_server_payment_reminders(bot, finance_service)
+
+
+async def _send_daily_staff_reminders(
+    bot: Bot,
+    finance_service: FinanceService,
+    today: date,
+) -> None:
+    chat_ids = await finance_service.reminder_chat_ids()
+    if not chat_ids:
+        logger.info("No chats for daily staff reminder")
+        return
+
+    try:
+        employee_name = await finance_service.scheduled_employee_for_date(today)
+        text = daily_staff_reminder_message(today, employee_name)
+    except Exception:
+        logger.exception("Failed to read scheduled employee for daily staff reminder")
+        text = daily_staff_reminder_message(today, None, sheet_error=True)
+
+    for chat_id in chat_ids:
+        try:
+            await bot.send_message(chat_id, text)
+        except Exception:
+            logger.exception(
+                "Failed to send daily staff reminder",
+                extra={"chat_id": chat_id},
+            )
 
 
 async def _send_revenue_reminders(
