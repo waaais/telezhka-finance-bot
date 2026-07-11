@@ -142,7 +142,7 @@ Evotor sync is disabled by default. When enabled, the bot can:
 Set these variables in `.env`:
 
 ```bash
-EVOTOR_ENABLED=true
+EVOTOR_ENABLED=0
 EVOTOR_BASE_URL=https://api.evotor.ru
 EVOTOR_REVENUE_URL_TEMPLATE=
 EVOTOR_STORE_UUID=
