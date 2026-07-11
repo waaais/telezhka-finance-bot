@@ -14,7 +14,7 @@ from app.integrations.google_sheets import (
 class GoogleSheetsWeeklySalaryTest(TestCase):
     def test_weekly_totals_group_named_employees_and_others(self) -> None:
         rows = self._sample_rows()
-        block = _find_weekly_salary_block(rows, _date_to_sheet_number(date(2026, 7, 7)))
+        block = _find_weekly_salary_block(rows, _date_to_sheet_number(date(2026, 7, 4)))
 
         self.assertIsNotNone(block)
         totals = _weekly_salary_totals(rows, block)
@@ -22,7 +22,7 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         self.assertEqual(totals["КСЮША"], 4000)
         self.assertEqual(totals["НАСТЯ"], 2000)
         self.assertEqual(totals["КРИСТИНА"], 0)
-        self.assertEqual(totals["&"], 5000)
+        self.assertEqual(totals["&"], 0)
 
     def test_weekly_totals_split_composite_employee_names(self) -> None:
         rows = self._sample_rows()
@@ -35,7 +35,7 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         self.assertEqual(totals["КСЮША"], 6000)
         self.assertEqual(totals["НАСТЯ"], 2000)
         self.assertEqual(totals["КРИСТИНА"], 0)
-        self.assertEqual(totals["&"], 7500)
+        self.assertEqual(totals["&"], 2500)
 
     def test_weekly_totals_keep_partial_composite_salary_on_first_employee(self) -> None:
         rows = self._sample_rows()
@@ -48,7 +48,7 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         self.assertEqual(totals["КСЮША"], 6000)
         self.assertEqual(totals["НАСТЯ"], 2000)
         self.assertEqual(totals["КРИСТИНА"], 0)
-        self.assertEqual(totals["&"], 5000)
+        self.assertEqual(totals["&"], 0)
 
     def test_weekly_totals_include_rows_from_adjacent_month_sheet(self) -> None:
         june_rows = self._daily_rows(
@@ -131,6 +131,25 @@ class GoogleSheetsWeeklySalaryTest(TestCase):
         self.assertIsNotNone(block)
         self.assertEqual(block.label_rows["КСЮША"], 10)
         self.assertEqual(block.label_rows["&"], 13)
+
+    def test_second_block_is_used_from_monday_of_second_calendar_week(self) -> None:
+        rows = self._sample_rows()
+
+        monday_block = _find_weekly_salary_block(
+            rows,
+            _date_to_sheet_number(date(2026, 7, 6)),
+        )
+        tuesday_block = _find_weekly_salary_block(
+            rows,
+            _date_to_sheet_number(date(2026, 7, 7)),
+        )
+
+        self.assertIsNotNone(monday_block)
+        self.assertIsNotNone(tuesday_block)
+        self.assertEqual(monday_block.label_rows["КСЮША"], 10)
+        self.assertEqual(tuesday_block.label_rows["КСЮША"], 10)
+        self.assertEqual(monday_block.data_start_row, 7)
+        self.assertEqual(monday_block.data_end_row, 13)
 
     def test_missing_weekly_block_returns_none(self) -> None:
         rows = self._sample_rows()

@@ -414,35 +414,49 @@ def _find_weekly_salary_block(
     header_indexes = [
         index for index, row in enumerate(rows) if _normalize_text(_cell(row, 6)) == "з/п"
     ]
+    target_date = _sheet_number_to_date(target_serial)
+    target_week = target_date - timedelta(days=target_date.weekday())
 
-    for header_position, header_index in enumerate(header_indexes):
-        next_header_index = (
-            header_indexes[header_position + 1]
-            if header_position + 1 < len(header_indexes)
-            else len(rows)
-        )
-
-        label_rows: dict[str, int] = {}
-        for label_index in range(header_index + 1, next_header_index):
-            label = _weekly_label(_cell(rows[label_index], 6))
-            if label is None:
-                continue
-            label_rows[label] = label_index + 1
-            if label == OTHER_EMPLOYEE_BUCKET:
-                break
-
-        if not label_rows:
+    rows_by_week: dict[date, list[int]] = {}
+    for row_number, row in enumerate(rows, start=1):
+        row_date = _sheet_value_to_date(_cell(row, 0))
+        if row_date is None:
             continue
+        week_start = row_date - timedelta(days=row_date.weekday())
+        rows_by_week.setdefault(week_start, []).append(row_number)
 
-        data_start_row = header_index + 1
-        data_end_row = next_header_index
-        if _date_is_inside_rows(rows, target_serial, data_start_row, data_end_row):
-            return WeeklySalaryBlock(
-                data_start_row=data_start_row,
-                data_end_row=data_end_row,
-                label_rows=label_rows,
-            )
-    return None
+    ordered_weeks = sorted(rows_by_week)
+    if target_week not in rows_by_week:
+        return None
+
+    block_position = ordered_weeks.index(target_week)
+    if block_position >= len(header_indexes):
+        return None
+
+    header_index = header_indexes[block_position]
+    next_header_index = (
+        header_indexes[block_position + 1]
+        if block_position + 1 < len(header_indexes)
+        else len(rows)
+    )
+    label_rows: dict[str, int] = {}
+    for label_index in range(header_index + 1, next_header_index):
+        label = _weekly_label(_cell(rows[label_index], 6))
+        if label is None:
+            continue
+        label_rows[label] = label_index + 1
+        if label == OTHER_EMPLOYEE_BUCKET:
+            break
+
+    if not label_rows:
+        return None
+
+    target_rows = rows_by_week[target_week]
+    return WeeklySalaryBlock(
+        data_start_row=min(target_rows),
+        data_end_row=max(target_rows),
+        label_rows=label_rows,
+    )
 
 
 def _weekly_salary_totals(
@@ -534,17 +548,26 @@ def _add_salary_to_totals(
         totals[bucket] += part_salary
 
 
-def _date_is_inside_rows(
-    rows: list[list[object]],
-    target_serial: int,
-    start_row: int,
-    end_row: int,
-) -> bool:
-    for row_number in range(start_row, end_row + 1):
-        row = rows[row_number - 1] if row_number - 1 < len(rows) else []
-        if _looks_like_same_date(_cell(row, 0), target_serial):
-            return True
-    return False
+def _sheet_number_to_date(value: int | float) -> date:
+    return date(1899, 12, 30) + timedelta(days=int(value))
+
+
+def _sheet_value_to_date(value: object) -> date | None:
+    if isinstance(value, int | float):
+        return _sheet_number_to_date(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.replace(".", "", 1).isdigit():
+        return _sheet_number_to_date(float(text))
+
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _employee_bucket(value: object) -> str:
